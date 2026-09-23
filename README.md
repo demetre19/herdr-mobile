@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.jpg" alt="Herdr Mobile" width="500">
+  <img src="docs/logo.jpg" alt="Herdr Mobile" width="300">
 </p>
 
 # Herdr Mobile Relay (fork)
