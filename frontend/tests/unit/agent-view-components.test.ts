@@ -62,14 +62,18 @@ describe('agent view controls and conversation loading hook', () => {
     const user = userEvent.setup();
     const current = agent();
     render(ManageDialog, { open: true, agent: current });
-    const select = screen.getByRole('combobox', { name: 'Default View' });
-    expect(select).toHaveValue('default');
-    expect(within(select).getByRole('option', { name: 'Use default (Terminal)' })).toBeInTheDocument();
+    const trigger = screen.getByRole('button', { name: 'Default view' });
+    expect(trigger).toHaveTextContent('Use default (Terminal)');
+
+    await user.click(trigger);
+    expect(screen.getByRole('option', { name: 'Use default (Terminal)' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
 
     setDefaultAgentView('conversation');
-    await waitFor(() => expect(within(select).getByRole('option', { name: 'Use default (Conversation)' })).toBeInTheDocument());
-    await user.selectOptions(select, 'conversation');
-    expect(select).toHaveValue('conversation');
+    await waitFor(() => expect(trigger).toHaveTextContent('Use default (Conversation)'));
+    await user.click(trigger);
+    await user.click(screen.getByRole('option', { name: 'Conversation' }));
+    expect(trigger).toHaveTextContent('Conversation');
     expect(paneAgentViewOverrides).toBeDefined();
     expect(localStorage.getItem('herdr_pane_agent_view_overrides')).toContain('conversation');
     expect(currentView).toBeDefined();
@@ -83,12 +87,14 @@ describe('agent view controls and conversation loading hook', () => {
     setDefaultAgentView('conversation');
     setPaneAgentView(current, 'conversation');
     render(ManageDialog, { open: true, agent: current });
-    const select = screen.getByRole('combobox', { name: 'Default View' });
-    expect(select).toHaveValue('conversation');
-    await user.selectOptions(select, 'default');
-    expect(select).toHaveValue('default');
+    const trigger = screen.getByRole('button', { name: 'Default view' });
+    expect(trigger).toHaveTextContent('Conversation');
+    await user.click(trigger);
+    await user.click(screen.getByRole('option', { name: 'Use default (Conversation)' }));
+    expect(trigger).toHaveTextContent('Use default (Conversation)');
     expect(localStorage.getItem('herdr_pane_agent_view_overrides')).toBeNull();
-    await user.selectOptions(select, 'conversation');
+    await user.click(trigger);
+    await user.click(screen.getByRole('option', { name: 'Conversation' }));
     expect(JSON.parse(localStorage.getItem('herdr_pane_agent_view_overrides')!)[paneViewPreferenceKey(current)!]).toBe('conversation');
   });
 
@@ -97,19 +103,20 @@ describe('agent view controls and conversation loading hook', () => {
     const second = agent('fedora', 'pane-2', 'terminal-2');
     setPaneAgentView(first, 'conversation');
     const view = render(ManageDialog, { open: true, agent: first });
-    expect(screen.getByRole('combobox', { name: 'Default View' })).toHaveValue('conversation');
+    expect(screen.getByRole('button', { name: 'Default view' })).toHaveTextContent('Conversation');
     await view.rerender({ open: true, agent: second });
-    expect(screen.getByRole('combobox', { name: 'Default View' })).toHaveValue('default');
+    expect(screen.getByRole('button', { name: 'Default view' })).toHaveTextContent('Use default (Terminal)');
   });
 
   it('allows readers to change only the local preference', async () => {
     const user = userEvent.setup();
     render(ManageDialog, { open: true, agent: agent(), readOnly: true });
     const dialog = screen.getByRole('dialog', { name: 'Manage Agent' });
-    const select = within(dialog).getByRole('combobox', { name: 'Default View' });
-    expect(select).toBeEnabled();
-    await user.selectOptions(select, 'conversation');
-    expect(select).toHaveValue('conversation');
+    const trigger = within(dialog).getByRole('button', { name: 'Default view' });
+    expect(trigger).toBeEnabled();
+    await user.click(trigger);
+    await user.click(screen.getByRole('option', { name: 'Conversation' }));
+    expect(trigger).toHaveTextContent('Conversation');
     expect(within(dialog).getByRole('button', { name: 'Rename Tab' })).toBeDisabled();
     expect(within(dialog).getByRole('button', { name: 'Clear Agent' })).toBeDisabled();
     expect(within(dialog).getByRole('button', { name: 'Stop Agent' })).toBeDisabled();
@@ -122,20 +129,21 @@ describe('agent view controls and conversation loading hook', () => {
       readOnly: true,
     });
     const dialog = screen.getByRole('dialog', { name: 'Manage Agent' });
-    expect(within(dialog).getByRole('combobox', { name: 'Default View' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Default view' })).toBeDisabled();
     expect(within(dialog).getByText(/stable pane identity is unavailable/)).toBeInTheDocument();
   });
 
-  it('restores a native select when its pane save fails', async () => {
+  it('restores the previous choice when its pane save fails', async () => {
     const user = userEvent.setup();
     const setItem = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
       throw new Error('storage full');
     });
     render(ManageDialog, { open: true, agent: agent() });
-    const select = screen.getByRole('combobox', { name: 'Default View' });
-    await user.selectOptions(select, 'conversation');
+    const trigger = screen.getByRole('button', { name: 'Default view' });
+    await user.click(trigger);
+    await user.click(screen.getByRole('option', { name: 'Conversation' }));
     expect(setItem).toHaveBeenCalled();
-    expect(select).toHaveValue('default');
+    expect(trigger).toHaveTextContent('Use default (Terminal)');
     expect(paneAgentViewOverrides).toBeDefined();
   });
 

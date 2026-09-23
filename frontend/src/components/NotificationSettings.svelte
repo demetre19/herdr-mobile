@@ -1,5 +1,6 @@
 <script lang="ts">
   import AppSwitch from '$components/ui/AppSwitch.svelte';
+  import AppSelect from '$components/ui/AppSelect.svelte';
   import Button from '$components/ui/Button.svelte';
   import Card from '$components/ui/Card.svelte';
   import {
@@ -75,8 +76,8 @@
     return 'Enable delivery before testing or receiving background notifications.';
   });
 
-  function chooseScope(event: Event): void {
-    selectedKey = (event.currentTarget as HTMLSelectElement).value;
+  function chooseScope(value: string): void {
+    selectedKey = value;
   }
 
   async function applyPolicy(policy: DevicePushPolicy): Promise<void> {
@@ -108,15 +109,13 @@
     });
   }
 
-  function changeMilliseconds(field: 'settle_ms' | 'cooldown_ms', event: Event): void {
+  function changeMilliseconds(field: 'settle_ms' | 'cooldown_ms', value: string): void {
     if (!selectedPolicy) return;
-    const value = Number((event.currentTarget as HTMLSelectElement).value);
-    applyPolicy({ ...selectedPolicy, [field]: value });
+    applyPolicy({ ...selectedPolicy, [field]: Number(value) });
   }
 
-  function changeSnooze(event: Event): void {
+  function changeSnooze(duration: string): void {
     if (!selectedPolicy) return;
-    const duration = (event.currentTarget as HTMLSelectElement).value;
     if (duration === 'global') applyPolicy(withGlobalSnooze(selectedPolicy));
     else if (duration === 'off') applyPolicy(clearSnooze(selectedPolicy));
     else applyPolicy(withTimedSnooze(selectedPolicy, Number(duration)));
@@ -154,13 +153,17 @@
   {#if deliveryEnabled}
     {#if scopes.length > 0 && selectedScope && selectedPolicy}
       <label class="field-label scope-label" for="notification-scope">Relay and device</label>
-      <select id="notification-scope" value={effectiveSelectedKey} onchange={chooseScope} disabled={busy || saving}>
-        {#each scopes as scope (pushPolicyScopeKey(scope.relay_id, scope.device_id))}
-          <option value={pushPolicyScopeKey(scope.relay_id, scope.device_id)}>
-            {scope.relay_label} — {scope.device_label}{scope.current_device ? ' (this device)' : ''}
-          </option>
-        {/each}
-      </select>
+      <AppSelect
+        id="notification-scope"
+        options={scopes.map((scope) => ({
+          value: pushPolicyScopeKey(scope.relay_id, scope.device_id),
+          label: `${scope.relay_label} — ${scope.device_label}${scope.current_device ? ' (this device)' : ''}`,
+        }))}
+        value={effectiveSelectedKey}
+        disabled={busy || saving}
+        aria-label="Relay and device"
+        onchange={chooseScope}
+      />
 
       <fieldset aria-label="Notification categories" disabled={busy || saving}>
         {#each CONFIGURABLE_CATEGORIES as category (category)}
@@ -179,32 +182,52 @@
       <div class="grid">
         <label>
           Settle delay
-          <select value={String(selectedPolicy.settle_ms)} onchange={event => changeMilliseconds('settle_ms', event)} disabled={busy || saving}>
-            <option value="0">Immediately</option>
-            <option value="2000">2 seconds</option>
-            <option value="5000">5 seconds</option>
-            <option value="15000">15 seconds</option>
-          </select>
+          <AppSelect
+            options={[
+              { value: '0', label: 'Immediately' },
+              { value: '2000', label: '2 seconds' },
+              { value: '5000', label: '5 seconds' },
+              { value: '15000', label: '15 seconds' },
+            ]}
+            value={String(selectedPolicy.settle_ms)}
+            disabled={busy || saving}
+            aria-label="Settle delay"
+            onchange={(value) => changeMilliseconds('settle_ms', value)}
+          />
         </label>
         <label>
           Cooldown
-          <select value={String(selectedPolicy.cooldown_ms)} onchange={event => changeMilliseconds('cooldown_ms', event)} disabled={busy || saving}>
-            <option value="0">None</option>
-            <option value="30000">30 seconds</option>
-            <option value="60000">1 minute</option>
-            <option value="300000">5 minutes</option>
-          </select>
+          <AppSelect
+            options={[
+              { value: '0', label: 'None' },
+              { value: '30000', label: '30 seconds' },
+              { value: '60000', label: '1 minute' },
+              { value: '300000', label: '5 minutes' },
+            ]}
+            value={String(selectedPolicy.cooldown_ms)}
+            disabled={busy || saving}
+            aria-label="Cooldown"
+            onchange={(value) => changeMilliseconds('cooldown_ms', value)}
+          />
         </label>
         <label>
           Snooze
-          <select value={snoozeSelection(selectedPolicy)} onchange={changeSnooze} disabled={busy || saving}>
-            <option value="off">Not snoozed</option>
-            {#if selectedPolicy.snoozed && selectedPolicy.snooze_until}<option value="timed">Until {new Date(selectedPolicy.snooze_until).toLocaleString()}</option>{/if}
-            <option value="3600000">For 1 hour</option>
-            <option value="28800000">For 8 hours</option>
-            <option value="86400000">For 24 hours</option>
-            <option value="global">Until I turn it back on</option>
-          </select>
+          <AppSelect
+            options={[
+              { value: 'off', label: 'Not snoozed' },
+              ...(selectedPolicy.snoozed && selectedPolicy.snooze_until
+                ? [{ value: 'timed', label: `Until ${new Date(selectedPolicy.snooze_until).toLocaleString()}` }]
+                : []),
+              { value: '3600000', label: 'For 1 hour' },
+              { value: '28800000', label: 'For 8 hours' },
+              { value: '86400000', label: 'For 24 hours' },
+              { value: 'global', label: 'Until I turn it back on' },
+            ]}
+            value={snoozeSelection(selectedPolicy)}
+            disabled={busy || saving}
+            aria-label="Snooze"
+            onchange={changeSnooze}
+          />
         </label>
       </div>
 
@@ -261,7 +284,7 @@
   .setting-row .hint { margin: .25rem 0 0; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .7rem; margin-top: 1rem; }
   .grid label { display: block; font-size: .78rem; font-weight: 650; }
-  .grid select { margin-top: .3rem; }
+  .grid :global(.app-select) { margin-top: .3rem; }
   .test-row { display: flex; align-items: center; gap: .7rem; margin-top: .9rem; }
   .test-row .hint { margin: 0; }
   .guidance { border-top: 1px solid var(--border); margin-top: .9rem; padding-top: .9rem; }

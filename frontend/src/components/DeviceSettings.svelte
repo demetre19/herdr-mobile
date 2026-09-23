@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import AppDialog from '$components/ui/AppDialog.svelte';
+  import AppSelect from '$components/ui/AppSelect.svelte';
   import Button from '$components/ui/Button.svelte';
   import Card from '$components/ui/Card.svelte';
   import { qrBitmap, type QrBitmap } from '$lib/qr';
@@ -300,7 +301,7 @@
               </div>
               {#if canAdminister}
                 <div class="device-actions">
-                  <Button variant="ghost" size="sm" disabled={disabled || !connected} onclick={() => beginRename(device)}>
+                  <Button variant="secondary" size="sm" disabled={disabled || !connected} onclick={() => beginRename(device)}>
                     Rename
                   </Button>
                   <Button variant="danger" size="sm" disabled={disabled || !connected} onclick={() => beginRevoke(device)}>
@@ -345,10 +346,15 @@
     <label for={`invite-device-name-${relayId}`}>Device name</label>
     <input bind:this={nameInput} id={`invite-device-name-${relayId}`} bind:value={inviteName} maxlength="64" autocomplete="off" required />
     <label for={`invite-device-role-${relayId}`}>Role</label>
-    <select id={`invite-device-role-${relayId}`} bind:value={inviteRole}>
-      <option value="reader">Reader — view only</option>
-      <option value="controller">Controller — may perform allowed actions</option>
-    </select>
+    <AppSelect
+      id={`invite-device-role-${relayId}`}
+      options={[
+        { value: 'reader', label: 'Reader — view only' },
+        { value: 'controller', label: 'Controller — may perform allowed actions' },
+      ]}
+      value={inviteRole}
+      onchange={(value) => { inviteRole = value as DeviceRole; }}
+    />
     <p class="hint">The generated link carries the one-use secret in its URL fragment. Share it only with the intended device.</p>
     <div class="dialog-actions">
       <Button type="submit" disabled={disabled || !connected}>Create Invitation</Button>

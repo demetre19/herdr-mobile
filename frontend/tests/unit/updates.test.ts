@@ -138,13 +138,15 @@ describe('release updates', () => {
     expect(fetcher).toHaveBeenCalledWith('/version.json?check=123', { cache: 'no-store' });
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(status).toMatchObject({
-      state: 'deployment-required',
+      // This build deploys the app manually: an upstream relay release never
+      // marks our origin as needing a deployment.
+      state: 'current',
       deployedVersion: APP_VERSION,
       upstreamVersion: available,
       upstreamAssets: 0,
       checkedAt: 123,
     });
-    expect(get(appUpdateStatus).state).toBe('deployment-required');
+    expect(get(appUpdateStatus).state).toBe('current');
   });
 
   it('offers reload for an assets-only deploy at the same version', async () => {

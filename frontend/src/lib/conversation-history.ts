@@ -1322,8 +1322,13 @@ function conversationError(value: unknown, fallback: string): ConversationBrowse
       }
     }
   }
+  let code = 'history_failed';
+  if (value && typeof value === 'object' && 'code' in value) {
+    const candidate = value.code;
+    if (typeof candidate === 'string' && candidate) code = candidate;
+  }
   return {
-    code: 'history_failed',
+    code,
     message: value instanceof Error && value.message ? value.message : fallback,
     retryable: true,
   };

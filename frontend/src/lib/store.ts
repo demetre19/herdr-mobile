@@ -77,6 +77,7 @@ import type {
 } from './transports';
 import {
   clearPaneAgentViewOverridesForRelay,
+  prunePaneAgentViewOverrides,
   terminalHistoryLines,
   terminalRefreshInterval,
 } from './preferences';
@@ -733,6 +734,27 @@ class RelayStore {
     this.relayConfigs.set(updated);
     saveRelayConfigs(updated);
     this.connectAll();
+  }
+
+  renameRelay(id: string, label: string): void {
+    const next = label.trim().slice(0, 128);
+    const relays = get(this.relayConfigs);
+    const existing = relays.find((relay) => relay.id === id);
+    if (!existing || !next || existing.label === next) return;
+    const updated = relays.map((relay) => (relay.id === id ? { ...relay, label: next } : relay));
+    this.relayConfigs.set(updated);
+    saveRelayConfigs(updated);
+    // Rewrite the denormalized label on live inventory so badges update
+    // without a reconnect — addRelay would tear down every connection.
+    this.agentsValue = this.agentsValue.map((agent) =>
+      agent.relay_id === id ? { ...agent, relay_label: next } : agent);
+    this.agents.set(this.agentsValue);
+    this.workspacesValue = this.workspacesValue.map((workspace) =>
+      workspace.relay_id === id ? { ...workspace, relay_label: next } : workspace);
+    this.workspaces.set(this.workspacesValue);
+    this.activitiesValue = this.activitiesValue.map((activity) =>
+      activity.relay_id === id ? { ...activity, relay_label: next } : activity);
+    this.activities.set(this.activitiesValue);
   }
 
   removeRelay(id: string): void {
@@ -1656,6 +1678,7 @@ class RelayStore {
       this.agentsValue = [...byPane.values()];
     }
     this.agents.set(this.agentsValue);
+    prunePaneAgentViewOverrides(this.agentsValue);
   }
   private mergePaneInteraction(paneId: string, message: Record<string, any>): void {
     const index = this.agentsValue.findIndex((agent) => agent.pane_id === paneId);
@@ -2212,27 +2235,6 @@ class RelayStore {
     }
   }
 
-
-  async deployAppUpdate(relayId: string, expectedVersion: string): Promise<void> {
-    const connection = this.connectionsValue.get(relayId);
-    if (!connection?.capabilities.includes('app_deploy') || !connection.appDeploy.configured) {
-      throw new CommandError(connection?.appDeploy.reason || 'This relay cannot deploy the phone app');
-    }
-    if (!connection.appDeploy.revision || connection.releaseVersion !== expectedVersion) {
-      throw new CommandError('Update this deployment relay to the upstream release first');
-    }
-    const result = await this.sendCommand(relayId, {
-      type: 'deploy_app_update',
-      expected_version: connection.releaseVersion,
-      expected_revision: connection.appDeploy.revision,
-      expected_origin: location.origin,
-    }, 30_000);
-    if (result.data?.app_deploy && connection === this.connectionsValue.get(relayId)) {
-      connection.appDeploy = normalizeAppDeployment(result.data.app_deploy);
-      this.emitConnections();
-    }
-  }
-
   private handleActionReceipt(relayId: string, message: Record<string, unknown>): void {
     const receipt = parseActionReceipt(message);
     if (!receipt) return;
@@ -2321,6 +2323,8 @@ class RelayStore {
     if (result.ok) pending.resolve(result);
     else {
       const error = new CommandError(result.error || 'Command failed');
+      const errorCode = result.data && typeof result.data.error_code === 'string' ? result.data.error_code : '';
+      if (errorCode) error.code = errorCode;
       error.data = { ...(result.data || {}), ...(result.phase === 'not_started' ? { not_started: true } : {}) };
       if (result.phase === 'dispatched_unknown') {
         error.data = { ...(result.data || {}), dispatched_unknown: true };

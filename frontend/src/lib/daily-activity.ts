@@ -68,7 +68,7 @@ export function dailyActivitySummary(
     const summary: MutableAgentSummary = {
       key,
       label: activity.project || activity.agent || (current ? displayName(current) : 'Agent'),
-      host: activity.host || activity.relay_label || (current ? hostLabel(current) : ''),
+      host: activity.relay_label || activity.host || (current ? hostLabel(current) : ''),
       workingMs: 0,
       workingSince: null,
       attention: 0,

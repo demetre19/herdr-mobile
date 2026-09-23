@@ -1,11 +1,13 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import AppDialog from '$components/ui/AppDialog.svelte';
+  import AppSelect from '$components/ui/AppSelect.svelte';
   import Button from '$components/ui/Button.svelte';
   import Card from '$components/ui/Card.svelte';
   import { navigate } from '$lib/router';
   import { CommandError, relayStore } from '$lib/store';
   import { informativePath, relayWorkspaceTrees, workspaceProvenance, type RelayWorkspaceTree } from '$lib/workspaces';
+  import { defaultDirectories, setDefaultDirectory } from '$lib/preferences';
   import type { RelayWorkspace, WorktreeListing } from '$lib/types';
 
   const relays = relayStore.relayConfigs;
@@ -19,6 +21,8 @@
   let cwd = $state('');
   let label = $state('');
   let directoryOpen = $state(false);
+  let directoryQuery = $state('');
+  let directoryNotice = $state('');
   let createOpen = $state(false);
   let busy = $state(false);
   let status = $state('');
@@ -69,6 +73,12 @@
       && connection.capabilities.includes('workspace_management');
   }));
   const connection = $derived($connections.get(relayId));
+  const filteredDirectories = $derived.by(() => {
+    const entries = connection?.directoryBrowser?.directories || [];
+    const query = directoryQuery.trim().toLowerCase();
+    if (!query || query.includes('/')) return entries;
+    return entries.filter((entry) => entry.name.toLowerCase().includes(query));
+  });
   const worktreeManagementAvailable = $derived(connection?.capabilities.includes('worktree_management') ?? false);
   const relayWorkspaces = $derived(
     $workspaces.filter((workspace) => workspace.relay_id === relayId),
@@ -105,7 +115,7 @@
     worktreeWorkspaceId = '';
     worktreeOpen = false;
     worktreeListing = null;
-    void loadDirectory('');
+    void loadDirectory($defaultDirectories[relayId] || '');
   });
 
   $effect(() => {
@@ -152,10 +162,12 @@
   function pathBase(path: string): string {
     return path.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).at(-1) || 'workspace';
   }
-
-  async function loadDirectory(path: string) {
+  async function loadDirectory(rawPath: string) {
+    const path = expandHome(rawPath);
     const loadRelayId = relayId;
     const generation = ++directoryLoadGeneration;
+    directoryQuery = '';
+    directoryNotice = '';
     if (!loadRelayId || !connection?.capabilities.includes('directory_browser')) return;
     try {
       const listing = await relayStore.listDirectories(loadRelayId, path);
@@ -169,6 +181,28 @@
       setStatus((caught as Error).message, true);
     }
   }
+
+  function expandHome(path: string): string {
+    const home = connection?.home || '';
+    if (!home) return path;
+    if (path === '~') return home;
+    if (path.startsWith('~/')) return home + path.slice(1);
+    return path;
+  }
+
+  async function submitDirectoryQuery() {
+    const query = directoryQuery.trim();
+    // Plain words filter the listing; anything path-like navigates.
+    if (!query || (query !== '~' && !query.includes('/'))) return;
+    const target = expandHome(query);
+    await loadDirectory(target);
+    const landed = connection?.directoryBrowser?.current.path;
+    directoryNotice = landed && landed !== target
+      ? `That path isn't reachable — showing ${connection?.directoryBrowser?.current.label || landed} instead.`
+      : '';
+  }
+
+  const isDefaultDirectory = $derived(Boolean(cwd) && expandHome($defaultDirectories[relayId] || '') === cwd);
 
   function setStatus(message: string, failed = false) {
     status = message;
@@ -732,10 +766,13 @@
   <Card>
     <div class="form-stack">
       <label for="workspace-relay">Computer</label>
-      <select id="workspace-relay" bind:value={relayId}>
-        {#if !readyRelays.length}<option value="">No compatible relays</option>{/if}
-        {#each readyRelays as relay (relay.id)}<option value={relay.id}>{relay.label}</option>{/each}
-      </select>
+      <AppSelect
+        id="workspace-relay"
+        options={readyRelays.map((relay) => ({ value: relay.id, label: relay.label }))}
+        bind:value={relayId}
+        placeholder={readyRelays.length ? 'Select a computer' : 'No compatible relays'}
+        aria-label="Computer"
+      />
     </div>
   </Card>
 
@@ -805,6 +842,17 @@
           <span>{connection?.directoryBrowser?.current.label || cwd || (connection?.directoryLoading ? 'Loading…' : 'Unavailable')}</span>
           <span aria-hidden="true">⌄</span>
         </button>
+        <button
+          type="button"
+          class="directory-default-pin"
+          class:pinned={isDefaultDirectory}
+          aria-pressed={isDefaultDirectory}
+          aria-label={isDefaultDirectory ? 'Remove default folder' : 'Set as default folder'}
+          title={isDefaultDirectory ? 'This folder is the default for new agents — tap to clear' : 'Start new agents in this folder by default'}
+          onclick={() => { setDefaultDirectory(relayId, isDefaultDirectory ? '' : cwd); }}
+        >
+          <svg viewBox="0 0 24 24" fill={isDefaultDirectory ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path></svg>
+        </button>
       </div>
       {#if directoryOpen}
         <div id="workspace-directory-list" class="directory-list" aria-label="Subdirectories">
@@ -813,12 +861,27 @@
           {:else if connection?.directoryError}
             <p role="alert">{connection.directoryError}</p>
           {:else}
+            <input
+              class="directory-search"
+              type="search"
+              bind:value={directoryQuery}
+              onkeydown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void submitDirectoryQuery(); } }}
+              placeholder="Filter or type a path…"
+              aria-label="Filter directories or enter a path"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+            />
+            {#if directoryNotice}<p class="directory-notice" role="status">{directoryNotice}</p>{/if}
             {#if connection?.directoryBrowser?.parent}
               <button type="button" onclick={() => loadDirectory(connection.directoryBrowser?.parent || '')}>↰ Parent folder</button>
             {/if}
-            {#each connection?.directoryBrowser?.directories || [] as directory (directory.path)}
+            {#each filteredDirectories as directory (directory.path)}
               <button type="button" onclick={() => loadDirectory(directory.path)}>📁 {directory.name}</button>
             {/each}
+            {#if connection?.directoryBrowser && !filteredDirectories.length}
+              <p>{directoryQuery.trim() ? 'No folders match.' : 'This folder has no subdirectories.'}</p>
+            {/if}
           {/if}
         </div>
       {/if}

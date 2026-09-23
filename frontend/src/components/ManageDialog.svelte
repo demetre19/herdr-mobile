@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import { get } from 'svelte/store';
   import AppDialog from '$components/ui/AppDialog.svelte';
+  import AppSelect from '$components/ui/AppSelect.svelte';
   import Button from '$components/ui/Button.svelte';
   import { agentOpeningView, isAgentView, paneViewPreferenceKey } from '$lib/agent-view';
   import { displayName, hostLabel, sessionName, tabName } from '$lib/agents';
@@ -26,6 +27,9 @@
     const override = panePreferenceKey ? $paneAgentViewOverrides[panePreferenceKey] : undefined;
     return isAgentView(override) ? override : 'default';
   });
+  // AppSelect writes its bound value before onchange runs, so a failed save
+  // needs an explicit revert — the derived selection alone cannot reach in.
+  let paneViewChoice = $derived(paneViewSelection);
   const inheritedPaneViewLabel = $derived(`Use default (${$defaultAgentView === 'conversation' ? 'Conversation' : 'Terminal'})`);
 
   const sessionRenameAvailable = $derived(Boolean(
@@ -86,18 +90,11 @@
     await tick();
     actionMenu?.querySelector<HTMLButtonElement>(`[data-confirm-action="${mode}"]`)?.focus();
   }
-
-  function changePaneView(event: Event): void {
-    const select = event.currentTarget as HTMLSelectElement;
-    const previous = paneViewSelection;
-    const selected = select.value;
-    if (!agent || (selected !== 'default' && !isAgentView(selected))) {
-      select.value = previous;
-      return;
-    }
+  function changePaneView(selected: string): void {
+    if (!agent || (selected !== 'default' && !isAgentView(selected))) return;
     const result = setPaneAgentView(agent, selected === 'default' ? null : selected);
     if (result === 'saved') return;
-    select.value = previous;
+    paneViewChoice = paneViewSelection;
     relayStore.showToast(result === 'invalid-target'
       ? 'This pane does not have a stable identity yet.'
       : 'Could not save this pane’s default view on this device.', true);
@@ -230,17 +227,18 @@
   {:else}
     <div bind:this={actionMenu} class="form-stack">
       <label for="pane-default-view">Default View</label>
-      <select
+      <AppSelect
         id="pane-default-view"
-        aria-describedby="pane-default-view-help"
-        value={paneViewSelection}
+        options={[
+          { value: 'default', label: inheritedPaneViewLabel },
+          { value: 'terminal', label: 'Terminal' },
+          { value: 'conversation', label: 'Conversation' },
+        ]}
+        bind:value={paneViewChoice}
         disabled={busy || !panePreferenceKey}
+        aria-label="Default view"
         onchange={changePaneView}
-      >
-        <option value="default">{inheritedPaneViewLabel}</option>
-        <option value="terminal">Terminal</option>
-        <option value="conversation">Conversation</option>
-      </select>
+      />
       <p id="pane-default-view-help" class="hint">
         {#if panePreferenceKey}
           Only affects this pane on this device. Applied the next time you open it.

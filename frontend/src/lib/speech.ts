@@ -5,6 +5,8 @@ import { securityState } from './security';
 
 const ENABLED_KEY = 'herdr_speech_enabled';
 const LANGUAGE_KEY = 'herdr_speech_language';
+const RATE_KEY = 'herdr_speech_rate';
+const ENGINE_KEY = 'herdr_speech_engine';
 
 /**
  * The languages a relay can read responses in, in the order the settings
@@ -37,8 +39,21 @@ function storedLanguage(): string {
   return isSpeechLanguage(phone) ? phone : 'en';
 }
 
+export type SpeechEngine = 'relay' | 'device';
+
+function storedRate(): number {
+  const parsed = Number(localStorage.getItem(RATE_KEY));
+  return Number.isFinite(parsed) && parsed >= 0.5 && parsed <= 3 ? parsed : 1;
+}
+
+function storedEngine(): SpeechEngine {
+  return localStorage.getItem(ENGINE_KEY) === 'device' ? 'device' : 'relay';
+}
+
 export const speechEnabled = writable(localStorage.getItem(ENABLED_KEY) === 'true');
 export const speechLanguage = writable(storedLanguage());
+export const speechRate = writable(storedRate());
+export const speechEngine = writable<SpeechEngine>(storedEngine());
 export const speechState = writable<SpeechState>(get(speechEnabled) ? 'idle' : 'off');
 let cancelRelaySynthesis: (() => void) | undefined;
 
@@ -53,6 +68,22 @@ export function setSpeechLanguage(code: string): void {
   if (!isSpeechLanguage(code)) return;
   localStorage.setItem(LANGUAGE_KEY, code);
   speechLanguage.set(code);
+  stopSpeech();
+}
+
+export function setSpeechRate(rate: number): void {
+  if (!Number.isFinite(rate)) return;
+  const clamped = Math.min(3, Math.max(0.5, rate));
+  localStorage.setItem(RATE_KEY, String(clamped));
+  speechRate.set(clamped);
+  // Applies to audio already playing; device utterances pick it up next chunk.
+  if (relayAudio) relayAudio.playbackRate = clamped;
+}
+
+export function setSpeechEngine(engine: SpeechEngine): void {
+  if (engine !== 'relay' && engine !== 'device') return;
+  localStorage.setItem(ENGINE_KEY, engine);
+  speechEngine.set(engine);
   stopSpeech();
 }
 
@@ -206,6 +237,54 @@ export function speakViaRelay(text: string, send: SpeechSender, onIssue?: (messa
   return true;
 }
 
+/**
+ * Reads text with the phone's own speech engine (Web Speech API). Starts
+ * instantly and needs no relay round trip, but on most phones it pauses when
+ * the screen locks — the relay engine keeps playing there.
+ */
+export function speakViaDevice(text: string, onIssue?: (message: string) => void): boolean {
+  if (get(securityState).locked || !get(speechEnabled) || !text.trim()) return false;
+  if (typeof speechSynthesis === 'undefined') {
+    onIssue?.('This phone has no speech engine.');
+    return false;
+  }
+  const generation = ++speakGeneration;
+  const chunks = speechChunks(speakableText(text) || text, 240);
+  speechState.set('speaking');
+  const language = get(speechLanguage);
+  const voices = speechSynthesis.getVoices();
+  const voice = voices.find((v) => v.lang.toLowerCase().startsWith(language));
+  let index = 0;
+  const speakNext = () => {
+    if (generation !== speakGeneration) return;
+    if (index >= chunks.length) {
+      speechState.set('idle');
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(chunks[index++]);
+    utterance.lang = language;
+    utterance.rate = get(speechRate);
+    if (voice) utterance.voice = voice;
+    utterance.onend = speakNext;
+    utterance.onerror = (event) => {
+      if (generation !== speakGeneration || event.error === 'canceled' || event.error === 'interrupted') return;
+      speechState.set('error');
+      onIssue?.('This phone could not read the text aloud.');
+    };
+    speechSynthesis.speak(utterance);
+  };
+  speakNext();
+  return true;
+}
+
+/**
+ * Speaks with whichever engine the settings select. The relay path needs the
+ * sender that streams synthesized audio; the device path ignores it.
+ */
+export function speak(text: string, send: SpeechSender, onIssue?: (message: string) => void): boolean {
+  return get(speechEngine) === 'device' ? speakViaDevice(text, onIssue) : speakViaRelay(text, send, onIssue);
+}
+
 async function playRelayChunks(
   chunks: string[],
   send: SpeechSender,
@@ -249,6 +328,7 @@ async function playRelayChunks(
 function playRelayBlob(blob: Blob): Promise<void> {
   return new Promise((resolve, reject) => {
     const element = relayElement();
+    element.playbackRate = get(speechRate);
     setRelaySource(blob);
     // A stop pauses the element instead of ending it; resolving on pause too
     // lets the loop observe the bumped generation and exit.
@@ -263,6 +343,7 @@ export function stopSpeech(): void {
   speakGeneration++;
   cancelRelaySynthesis?.();
   cancelRelaySynthesis = undefined;
+  if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
   stopPlayback();
   speechState.set(get(speechEnabled) ? 'idle' : 'off');
 }

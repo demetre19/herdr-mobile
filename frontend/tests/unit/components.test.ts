@@ -1172,7 +1172,8 @@ describe('accessible Svelte interactions', () => {
       await user.click(within(dialog).getByRole('button', { name: 'Close Workspace' }));
       await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
 
-      await user.selectOptions(screen.getByRole('combobox', { name: 'Computer' }), 'beta');
+      await user.click(screen.getByRole('button', { name: 'Computer' }));
+      await user.click(screen.getByRole('option', { name: 'Beta' }));
       rejectClose(Object.assign(new CommandError('Close the workspace group explicitly'), {
         data: { code: 'workspace_group_close_required', workspace_ids: ['w1', 'w2'] },
       }));
@@ -1240,11 +1241,11 @@ describe('accessible Svelte interactions', () => {
     relayStore.connections.set(new Map([['fast', ready as never]]));
     try {
       render(LaunchView, { relayId: 'slow', cwd: '/home/user/project' });
-      const select = screen.getByRole('combobox', { name: 'Computer' }) as HTMLSelectElement;
+      const trigger = screen.getByRole('button', { name: 'Computer' });
       // The faster sibling wins only while the requested relay is absent.
-      await vi.waitFor(() => expect(select.value).toBe('fast'));
+      await vi.waitFor(() => expect(trigger).toHaveTextContent('Fast'));
       relayStore.connections.set(new Map([['fast', ready as never], ['slow', ready as never]]));
-      await vi.waitFor(() => expect(select.value).toBe('slow'));
+      await vi.waitFor(() => expect(trigger).toHaveTextContent('Slow'));
     } finally {
       relayStore.connections.set(new Map());
       relayStore.relayConfigs.set([]);

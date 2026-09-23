@@ -15,7 +15,7 @@
     sortedAgents,
     tabName,
   } from '$lib/agents';
-  import { homeLayout } from '$lib/preferences';
+  import { homeLayout, persistWorkspaceDisclosure, pinnedConversations, pinnedWorkspaces, togglePinnedConversation, togglePinnedWorkspace } from '$lib/preferences';
   import { relayStore } from '$lib/store';
   import type { Agent, RelayConfig, RelayConnectionView, RelayWorkspace } from '$lib/types';
   import { homeRelativePath, informativePath, workspaceGroupTrees, workspaceGroups, workspaceIdentity, workspaceProvenance, workspaceStateTone, type WorkspaceGroup, type WorkspaceGroupTree, type WorkspaceTab } from '$lib/workspaces';
@@ -76,21 +76,24 @@
   // Optimistic arrangement applied between releasing a drag and the relay
   // confirming the new order, so tabs never snap back while Herdr catches up.
   let pendingTabOrder = $state<{ key: string; order: string[] } | null>(null);
+  const pinnedConversationKeys = $derived(new Set($pinnedConversations));
   const backgroundAgents = $derived(agents.filter((agent) => {
+    if (pinnedConversationKeys.has(agent.pane_id)) return false;
     const group = agentStatusGroup(agent);
     return group !== 'blocked' && group !== 'attention';
   }));
   const workingAgents = $derived(backgroundAgents.filter((agent) => agentStatusGroup(agent) === 'working'));
   const doneAgents = $derived(backgroundAgents.filter((agent) => agentStatusGroup(agent) === 'done'));
   const mixedLayout = $derived($homeLayout === 'mixed');
+  const pinnedKeys = $derived(new Set($pinnedWorkspaces));
   const doneWorkspaces = $derived(mixedLayout ? [] : workspaceGroupTrees(workspaceGroups(
     doneAgents,
     workspaceRecordsFor(doneAgents, false),
-  )));
+  )).filter((tree) => !pinnedKeys.has(tree.workspace.key)));
   const workingWorkspaces = $derived(mixedLayout ? [] : workspaceGroupTrees(workspaceGroups(
     workingAgents,
     workspaceRecordsFor(workingAgents, false),
-  )));
+  )).filter((tree) => !pinnedKeys.has(tree.workspace.key)));
   const idleAgents = $derived(backgroundAgents.filter((agent) => {
     const group = agentStatusGroup(agent);
     return group !== 'working' && group !== 'done';
@@ -98,10 +101,32 @@
   const idleWorkspaces = $derived(mixedLayout ? [] : workspaceGroupTrees(workspaceGroups(
     idleAgents,
     workspaceRecordsFor(idleAgents, true),
-  )));
+  )).filter((tree) => !pinnedKeys.has(tree.workspace.key)));
   const mixedWorkspaces = $derived(mixedLayout
     ? workspaceGroupTrees(workspaceGroups(backgroundAgents, workspaceRecordsFor(backgroundAgents, true)))
+      .filter((tree) => !pinnedKeys.has(tree.workspace.key))
     : []);
+  const pinnedAgents = $derived(backgroundAgents.filter((agent) => pinnedKeys.has(workspaceIdentity(agent))));
+  const pinnedTrees = $derived.by(() => {
+    if (!pinnedKeys.size) return [] as WorkspaceGroupTree[];
+    const trees = workspaceGroupTrees(workspaceGroups(
+      pinnedAgents,
+      workspaceRecordsFor(pinnedAgents, true),
+    )).filter((tree) => pinnedKeys.has(tree.workspace.key));
+    const order = new Map($pinnedWorkspaces.map((key, index) => [key, index]));
+    return trees.sort((left, right) =>
+      (order.get(left.workspace.key) ?? Number.MAX_SAFE_INTEGER)
+      - (order.get(right.workspace.key) ?? Number.MAX_SAFE_INTEGER));
+  });
+  const pinnedConversationAgents = $derived.by(() => {
+    if (!pinnedConversationKeys.size) return [] as Agent[];
+    const order = new Map($pinnedConversations.map((key, index) => [key, index]));
+    return agents
+      .filter((agent) => pinnedConversationKeys.has(agent.pane_id))
+      .sort((left, right) =>
+        (order.get(left.pane_id) ?? Number.MAX_SAFE_INTEGER)
+        - (order.get(right.pane_id) ?? Number.MAX_SAFE_INTEGER));
+  });
 
   function workspaceRecordsFor(visible: Agent[], includeEmpty: boolean): RelayWorkspace[] {
     const visibleKeys = new Set(visible.map((agent) => workspaceIdentity(agent)));
@@ -170,10 +195,16 @@
       (rank.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(right.id) ?? Number.MAX_SAFE_INTEGER));
   }
 
-  function rememberWorkspaceDisclosure(key: string, event: Event) {
+  function rememberWorkspaceDisclosure(key: string, openDefault: boolean, event: Event) {
     const details = event.currentTarget;
     if (!(details instanceof HTMLDetailsElement)) return;
-    workspaceDisclosure[key] = details.open;
+    // ontoggle fires for programmatic `open` changes too (openDefault flips
+    // when an agent starts working). Persist only the user's divergence from
+    // the computed default — a state equal to the default deletes the key so
+    // stale overrides can't pin a card open forever.
+    if (details.open === openDefault) delete workspaceDisclosure[key];
+    else workspaceDisclosure[key] = details.open;
+    persistWorkspaceDisclosure(workspaceDisclosure);
   }
 
   function tabOrderingAvailable(workspace: WorkspaceGroup): boolean {
@@ -503,6 +534,19 @@
             {/if}
           </span>
         </button>
+        <button
+          type="button"
+          class="agent-pin"
+          class:pinned={pinnedConversationKeys.has(agent.pane_id)}
+          aria-pressed={pinnedConversationKeys.has(agent.pane_id)}
+          aria-label={pinnedConversationKeys.has(agent.pane_id) ? `Unpin ${displayName(agent)}` : `Pin ${displayName(agent)}`}
+          title={pinnedConversationKeys.has(agent.pane_id) ? 'Unpin conversation' : 'Pin conversation to top'}
+          onclick={(event) => { event.stopPropagation(); togglePinnedConversation(agent.pane_id); }}
+        >
+          <svg viewBox="0 0 24 24" fill={pinnedConversationKeys.has(agent.pane_id) ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path>
+          </svg>
+        </button>
         {#if blocked && !responding.has(agent.pane_id)}
           <div class="agent-actions" aria-label={`Actions for ${displayName(agent)}`}>
             {#if interaction}
@@ -576,7 +620,7 @@
         class:done-workspace-card={done}
         class="workspace-card"
         open={workspaceDisclosure[disclosureKey] ?? openDefault}
-        ontoggle={(event) => rememberWorkspaceDisclosure(disclosureKey, event)}
+        ontoggle={(event) => rememberWorkspaceDisclosure(disclosureKey, openDefault, event)}
       >
         <summary>
           {#if stateTone}
@@ -613,6 +657,23 @@
               >{relativeTimestamp(summary.lastActiveAt)}</time>
             {/if}
           </span>
+          <button
+            type="button"
+            class="workspace-pin"
+            class:pinned={pinnedKeys.has(workspace.key)}
+            aria-pressed={pinnedKeys.has(workspace.key)}
+            aria-label={pinnedKeys.has(workspace.key) ? `Unpin ${workspace.label}` : `Pin ${workspace.label}`}
+            title={pinnedKeys.has(workspace.key) ? 'Unpin workspace' : 'Pin workspace to top'}
+            onclick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              togglePinnedWorkspace(workspace.key);
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill={pinnedKeys.has(workspace.key) ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path>
+            </svg>
+          </button>
         </summary>
         {#if provenance}
           <p class="workspace-provenance">{provenance}</p>
@@ -674,6 +735,16 @@
     <div class="empty-state" role="status">Waiting for relays…</div>
   {/if}
 
+  {#if pinnedConversationAgents.length}
+    <section class="agent-section pinned-section" aria-labelledby="section-pinned-conversations">
+      <h2 id="section-pinned-conversations" class="section-heading">
+        <svg class="section-pin-icon" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path></svg>Pinned conversations
+        <span class="section-count" aria-hidden="true">{pinnedConversationAgents.length}</span>
+      </h2>
+      {@render agentGrid(pinnedConversationAgents, false)}
+    </section>
+  {/if}
+
   {#each statusDefinitions as [group, title, tone] (group)}
     {@const visible = sortedAgents(agents.filter((agent) => agentStatusGroup(agent) === group))}
     {#if visible.length}
@@ -686,6 +757,16 @@
       </section>
     {/if}
   {/each}
+
+  {#if pinnedTrees.length}
+    <section class="agent-section pinned-section" aria-labelledby="section-pinned">
+      <h2 id="section-pinned" class="section-heading">
+        <svg class="section-pin-icon" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path></svg>Pinned
+        <span class="section-count" aria-hidden="true">{pinnedTrees.length}</span>
+      </h2>
+      {@render workspaceGrid(pinnedTrees, true, 'mixed')}
+    </section>
+  {/if}
 
   {#if doneWorkspaces.length}
     <section class="agent-section done-section" aria-labelledby="section-done">

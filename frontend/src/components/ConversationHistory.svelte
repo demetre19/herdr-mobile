@@ -18,8 +18,9 @@
   import {
     armSpeechKeepalive,
     releaseSpeechKeepalive,
-    speakViaRelay,
+    speak,
     speechEnabled,
+    speechEngine,
     speechLanguage,
     speechLanguageLabel,
     speechState,
@@ -441,15 +442,17 @@
     const toast = (message: string) => relayStore.showToast(message, true);
     // Checked before anything plays: unlocking audio for a language the relay
     // cannot speak leaves the phone with a silent stream and no explanation.
+    // The device engine speaks whatever the phone has, so it skips this check.
     const languages = $connections.get(agent.relay_id)?.speechLanguages ?? [];
-    if (!languages.includes($speechLanguage)) {
+    if ($speechEngine === 'relay' && !languages.includes($speechLanguage)) {
       toast(`This relay has no ${speechLanguageLabel($speechLanguage)} voice; install a Piper voice for it on that computer.`);
       return;
     }
     // Armed inside the tap: the relay fetches audio before playing, and a
-    // play() after that round trip is autoplay-blocked.
-    armSpeechKeepalive(toast);
-    const spoke = speakViaRelay(
+    // play() after that round trip is autoplay-blocked. The device engine
+    // needs no media element, so arming is skipped for it.
+    if ($speechEngine === 'relay') armSpeechKeepalive(toast);
+    const spoke = speak(
       text,
       (chunk, language) => relayStore.speakToAgent(agent, chunk, language),
       toast,

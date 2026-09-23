@@ -11,7 +11,9 @@ const APP_RELOAD_ATTEMPTS_KEY = 'herdr_app_reload_attempts';
 const MAX_AUTOMATIC_RELOAD_ATTEMPTS = 2;
 const sessionStartedRelayIds = new Set<string>();
 const APP_DEPLOY_SELF_UPDATE_MIN_VERSION = '0.13.3';
-export const MANAGED_UPDATE_COMMAND = 'HERDR_MOBILE_RELAY_NO_AUTO_SETUP=1 herdr plugin install 0cv/herdr-mobile-relay --yes';
+// This checkout carries local patches; upstream `herdr plugin install` would
+// overwrite them. Updates ship from the local build+deploy flow instead.
+export const MANAGED_UPDATE_COMMAND = 'cd ~/.config/herdr/plugins/github/herdr-mobile-relay.events-cf495399b2fa && scripts/build.sh && make service-install';
 export const CHECKOUT_UPDATE_COMMAND = 'git pull --ff-only && make service-install';
 const RELAY_UPDATE_STATES = new Set([
   'checking',
@@ -133,15 +135,15 @@ export function observeAppUpstreamVersion(value: string): void {
   }
   appUpdateStatus.update((current) => {
     if (!current.deployedVersion) return current;
+    // This build deploys the app manually; the relay's upstream release
+    // version never marks our origin as needing a deployment.
     const state = appUpdateAvailable({
       version: current.deployedVersion,
       assets: current.deployedAssets,
       build: current.deployedBuild,
     })
       ? 'reload-ready'
-      : newerVersion(relayUpstreamVersion, current.deployedVersion)
-        ? 'deployment-required'
-        : 'current';
+      : 'current';
     return {
       ...current,
       state,
@@ -234,9 +236,9 @@ async function versionMetadata(
 function appStatusFromMetadata(deployed: AppOriginMetadata, checkedAt: number): AppUpdateStatus {
   const state = appUpdateAvailable(deployed)
     ? 'reload-ready'
-    : relayUpstreamVersion && newerVersion(relayUpstreamVersion, deployed.version)
-      ? 'deployment-required'
-      : 'current';
+    // This build deploys the app manually; upstream relay releases never
+    // mark our origin as needing a deployment.
+    : 'current';
   return {
     state,
     currentVersion: APP_VERSION,

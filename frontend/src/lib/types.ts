@@ -552,7 +552,7 @@ export interface AppDeploymentStatus {
 }
 
 export interface AppUpdateStatus {
-  state: 'checking' | 'current' | 'reload-ready' | 'deployment-required' | 'failed';
+  state: 'checking' | 'current' | 'reload-ready' | 'failed';
   currentVersion: string;
   currentAssets: number;
   /** Digest-derived identity of the bytes that initialized this document. */

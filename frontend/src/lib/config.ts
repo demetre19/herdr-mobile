@@ -21,6 +21,13 @@ export const PUSH_VAPID_KEY_PREFIX = 'herdr_push_vapid_key_';
 export const HANDLED_NOTIFICATION_ACTIONS_KEY = 'herdr_handled_notification_actions';
 export const DEFAULT_AGENT_VIEW_KEY = 'herdr_default_agent_view';
 export const PANE_AGENT_VIEW_OVERRIDES_KEY = 'herdr_pane_agent_view_overrides';
+export const PINNED_WORKSPACES_KEY = 'herdr_pinned_workspaces';
+export const PINNED_CONVERSATIONS_KEY = 'herdr_pinned_conversations';
+export const WORKSPACE_DISCLOSURE_KEY = 'herdr_workspace_disclosure';
+export const DEFAULT_DIRECTORY_KEY = 'herdr_default_directory';
+export const APPEARANCE_KEY = 'herdr_appearance';
+export const ACCENT_KEY = 'herdr_accent';
+export const ACCENT_CUSTOM_KEY = 'herdr_accent_custom';
 
 export const APP_PROTOCOL_VERSION = __APP_PROTOCOL_VERSION__;
 export const APP_VERSION = __APP_VERSION__;
@@ -31,20 +38,46 @@ export const APP_ASSET_VERSION = __APP_ASSET_VERSION__;
 // merely a version.json response.
 export const APP_BUILD_ID = __APP_BUILD_ID__;
 export const SERVICE_WORKER_URL = __SERVICE_WORKER_URL__;
-export const THEMES = ['dark', 'light', 'nord', 'solarized', 'rose', 'latte'] as const;
+export const THEMES = ['neutral', 'chat', 'grove', 'ocean', 'ember', 'iris'] as const;
 export type Theme = (typeof THEMES)[number];
-// Terminal color scheme per theme. Every theme keeps a dark terminal pane by
-// default; a light-terminal theme renders the pane on a light background and
-// swaps the ANSI palette so the desktop's light-scheme output stays legible.
-export type TerminalScheme = 'dark' | 'light';
-export const THEME_TERMINAL_SCHEMES: Record<Theme, TerminalScheme> = {
-  dark: 'dark',
-  light: 'dark',
-  nord: 'dark',
-  solarized: 'dark',
-  rose: 'dark',
-  latte: 'light',
+export const THEME_LABELS: Record<Theme, string> = {
+  neutral: 'Neutral',
+  chat: 'Chat',
+  grove: 'Grove',
+  ocean: 'Ocean',
+  ember: 'Ember',
+  iris: 'Iris',
 };
+export const APPEARANCES = ['system', 'light', 'dark'] as const;
+export type Appearance = (typeof APPEARANCES)[number];
+export const APPEARANCE_LABELS: Record<Appearance, string> = {
+  system: 'System',
+  light: 'Light',
+  dark: 'Dark',
+};
+// Accent override: 'theme' follows the active theme's own accent; the rest pin
+// one of the family accents regardless of theme; 'custom' uses ACCENT_CUSTOM_KEY's hex.
+export const ACCENTS = ['theme', 'chat', 'grove', 'ocean', 'ember', 'iris', 'custom'] as const;
+export type Accent = (typeof ACCENTS)[number];
+export const ACCENT_LABELS: Record<Accent, string> = {
+  theme: 'Theme',
+  chat: 'Chat',
+  grove: 'Grove',
+  ocean: 'Ocean',
+  ember: 'Ember',
+  iris: 'Iris',
+  custom: 'Custom',
+};
+// Swatch dots in the pickers: each family's dark-variant accent. 'custom' has
+// no fixed swatch — the picker shows the stored custom hex instead.
+export const ACCENT_SWATCHES: Record<Exclude<Accent, 'theme' | 'custom'>, string> = {
+  chat: 'oklch(0.460685 0.185347 4.099)',
+  grove: 'oklch(0.796228 0.133058 157.319)',
+  ocean: 'oklch(0.758933 0.105833 241.548)',
+  ember: 'oklch(0.762174 0.124117 52.082)',
+  iris: 'oklch(0.671712 0.169136 293.929)',
+};
+export type TerminalScheme = 'dark' | 'light';
 export const INTERFACE_SIZES = ['compact', 'regular', 'large'] as const;
 export type InterfaceSize = (typeof INTERFACE_SIZES)[number];
 export const TERMINAL_HISTORY_OPTIONS = [100, 500, 1_000, 10_000] as const;
@@ -88,13 +121,15 @@ export function paneLeaseRenewalAllowed(visible: boolean, hiddenAt: number, now:
   return hiddenAt > 0 && now - hiddenAt < PANE_LEASE_HIDDEN_GRACE_MS;
 }
 
-export const THEME_COLORS: Record<Theme, string> = {
-  dark: '#0a0a0a',
-  light: '#f5f5f5',
-  nord: '#2e3440',
-  solarized: '#002b36',
-  rose: '#191724',
-  latte: '#eff1f5',
+// Canvas color per theme × resolved appearance, used for the PWA theme-color
+// meta tag so the status bar matches the visible chrome.
+export const THEME_COLORS: Record<Theme, Record<'light' | 'dark', string>> = {
+  neutral: { light: '#fafafa', dark: '#0a0a0a' },
+  chat: { light: 'oklch(0.982446 0.010114 325.653)', dark: 'oklch(0.22813 0.020366 307.469)' },
+  grove: { light: 'oklch(0.972369 0.005497 157.15)', dark: 'oklch(0.260865 0.02152 162.75)' },
+  ocean: { light: 'oklch(0.974199 0.002856 241.597)', dark: 'oklch(0.242641 0.024125 250.573)' },
+  ember: { light: 'oklch(0.976527 0.002685 60.725)', dark: 'oklch(0.245899 0.019144 42.044)' },
+  iris: { light: 'oklch(0.976531 0.003855 303.226)', dark: 'oklch(0.225975 0.031062 293.741)' },
 };
 
 /**
@@ -351,10 +386,19 @@ export function importQuickSetup(
     }
     return relay.token === setup.token || relay.label === setup.label;
   };
+  const gatewayOverlap = (relay: RelayConfig): boolean =>
+    (relay.gatewayUrls ?? [relay.gatewayUrl ?? '']).some((entry) => setup.gatewayUrls?.includes(entry));
   const existing = setup.transport === 'hybrid'
-    ? relays.find((relay) => relay.transport === 'hybrid'
-      && (relay.gatewayUrls ?? [relay.gatewayUrl ?? '']).some((entry) => setup.gatewayUrls?.includes(entry))
-      && sameComputer(relay))
+    ? relays.find((relay) => relay.transport === 'hybrid' && gatewayOverlap(relay) && sameComputer(relay))
+      // A renamed relay no longer matches on label, and an invitation-paired
+      // entry holds no token to compare. When the link carries neither a
+      // rendezvous id nor a token, the only paired relay on this gateway is
+      // the same computer — updating it beats minting a duplicate that shows
+      // the pre-rename label.
+      ?? (!setup.gatewayRelayId && !setup.token && !invitation
+        ? relays.find((relay) => relay.transport === 'hybrid' && relay.paired && gatewayOverlap(relay)
+          && relays.filter((candidate) => candidate.transport === 'hybrid' && candidate.paired && gatewayOverlap(candidate)).length === 1)
+        : undefined)
     // A quick tunnel mints a new hostname on every relay restart, but the
     // relay's key persists. The same key is the same relay, so the stored
     // entry - and the device credential enrolled under its id - follows the

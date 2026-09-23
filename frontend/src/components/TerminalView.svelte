@@ -28,10 +28,17 @@
     terminalSearchText,
   } from '$lib/terminal-find';
   import {
+    dictationState,
+    dictationSupported,
+    startDictation,
+    stopDictation,
+  } from '$lib/dictation';
+  import {
     armSpeechKeepalive,
     releaseSpeechKeepalive,
-    speakViaRelay,
+    speak,
     speechEnabled,
+    speechEngine,
     speechLanguage,
     speechLanguageLabel,
     speechState,
@@ -87,7 +94,10 @@
 
 
   interface QueuedKeyCommand {
-    keys: string[];
+    /** 'keys' → send_keys, 'input' → send_input (typed text/semantic keys), 'text' → send_text (raw bytes). */
+    kind?: 'keys' | 'input' | 'text';
+    keys?: string[];
+    text?: string;
     label: string;
     resolve: (sent: boolean) => void;
   }
@@ -101,6 +111,7 @@
   let transcriptElement = $state<HTMLTextAreaElement>(null!);
   let responseElement = $state<HTMLTextAreaElement>(null!);
   let agentResponsePreviewElement = $state<HTMLTextAreaElement>(null!);
+  let directInputElement = $state<HTMLTextAreaElement>(null!);
   let copiedAgentResponseText = $state('');
   let composer = $state(untrack(() => loadPromptDraft(agent)));
   let composerFocused = $state(false);
@@ -115,6 +126,9 @@
   let noEchoDraftBaseline: string | null = null;
   let noEchoDraftTainted = false;
   let draftPersistenceWarning = $state('');
+  // Dictation: the draft before the mic started is kept so interim fragments
+  // render appended to it without committing until recognition finalizes.
+  let dictationBase = $state('');
   let historyTruncated = $state(false);
   // Pre-resize frame kept only to suppress display of transient frames while
   // the agent repaints at the new width.
@@ -163,6 +177,11 @@
   let ctrlArmed = $state(false);
   let shiftArmed = $state(false);
   let altArmed = $state(false);
+  // Direct typing mode: a hidden capture field forwards keystrokes straight to
+  // the pane (send_input/send_keys/send_text) instead of the buffered composer.
+  let directInput = $state(false);
+  let directComposing = false;
+  let directBackspaceAt = 0;
   let keyFeedback = $state('');
   let keyFeedbackError = $state(false);
   let keyRequestSending = $state(false);
@@ -1225,11 +1244,29 @@
   }
 
 
+  function toggleDictation() {
+    if ($dictationState === 'listening') {
+      stopDictation();
+      return;
+    }
+    dictationBase = composer;
+    const started = startDictation(
+      $speechLanguage,
+      (finalText, interimText) => {
+        const separator = dictationBase && (finalText || interimText) && !dictationBase.endsWith(' ') ? ' ' : '';
+        composer = dictationBase + separator + finalText + interimText;
+      },
+      (message) => relayStore.showToast(message, true),
+    );
+    if (!started) dictationBase = '';
+  }
+
   async function sendPrompt() {
     const submittedDraft = composer;
     const terminalText = terminalTextMode;
     const text = terminalText === 'filter' ? submittedDraft : submittedDraft.replace(/[\r\n]+$/g, '');
     if (!text || composerLocked || sendingPrompt) return;
+    if ($dictationState === 'listening') stopDictation();
     if (terminalText === 'filter') {
       if (keySending || keyQueue.length) return;
       if (!/^[a-zA-Z0-9 ._/:+()[\]-]{1,32}$/.test(text) || text.endsWith(' ')) {
@@ -1378,15 +1415,30 @@
     keyRequestSending = true;
     while (keyQueue.length) {
       const command = keyQueue.shift()!;
-      showKeyFeedback(`Sending ${command.label}…`);
+      if (command.label) showKeyFeedback(`Sending ${command.label}…`);
       try {
-        await relayStore.sendToAgent(agent, {
-          type: 'send_keys',
-          keys: command.keys,
-          activity_label: command.label,
-        });
+        if (command.kind === 'input') {
+          await relayStore.sendToAgent(agent, {
+            type: 'send_input',
+            text: command.text || '',
+            keys: command.keys || [],
+            activity_label: command.label || 'Typed terminal input',
+          });
+        } else if (command.kind === 'text') {
+          await relayStore.sendToAgent(agent, {
+            type: 'send_text',
+            text: command.text || '',
+            activity_label: command.label || 'Sent terminal bytes',
+          });
+        } else {
+          await relayStore.sendToAgent(agent, {
+            type: 'send_keys',
+            keys: command.keys || [],
+            activity_label: command.label,
+          });
+        }
         command.resolve(true);
-        showKeyFeedback(`${command.label} sent`);
+        if (command.label) showKeyFeedback(`${command.label} sent`);
         if (keyReadTimer) clearTimeout(keyReadTimer);
         keyReadTimer = setTimeout(() => {
           if (componentMounted) relayStore.readPane(agent);
@@ -1462,17 +1514,19 @@
     const toast = (message: string) => relayStore.showToast(message, true);
     // Checked before anything plays: unlocking audio for a language the relay
     // cannot speak leaves the phone with a silent stream and no explanation.
-    if (!relaySpeechLanguages.includes($speechLanguage)) {
+    // The device engine speaks whatever the phone has, so it skips this check.
+    if ($speechEngine === 'relay' && !relaySpeechLanguages.includes($speechLanguage)) {
       toast(`This relay has no ${speechLanguageLabel($speechLanguage)} voice; install a Piper voice for it on that computer.`);
       return;
     }
     // Armed before the relay round trip: the tap's activation window does not
-    // survive the await, and audio started after it is autoplay-blocked.
-    armSpeechKeepalive(toast);
+    // survive the await, and audio started after it is autoplay-blocked. The
+    // device engine needs no media element, so arming is skipped for it.
+    if ($speechEngine === 'relay') armSpeechKeepalive(toast);
     fetchingSpeechText = true;
     try {
       const { text, failure } = await latestAgentResponse();
-      const spoke = text.trim() && speakViaRelay(
+      const spoke = text.trim() && speak(
         text,
         (chunk, language) => relayStore.speakToAgent(agent, chunk, language),
         toast,
@@ -1645,6 +1699,171 @@
         shiftArmed = false;
       }
     });
+  }
+
+  // ---- Direct typing -------------------------------------------------------
+  // The hidden capture field mirrors Orca mobile's live input: whatever the
+  // on-screen keyboard produces is forwarded to the pane immediately. Text
+  // rides send_input (the typed, paste-aware socket call); named keys ride
+  // send_input's semantic key set; keys Herdr has no name for (Home, End,
+  // Delete, PageUp, PageDown, Insert) go as raw VT sequences via send_text.
+
+  const DIRECT_INPUT_KEYS: Record<string, string> = {
+    Enter: 'Enter',
+    Escape: 'Esc',
+    Tab: 'Tab',
+    Backspace: 'Backspace',
+    ArrowUp: 'Up',
+    ArrowDown: 'Down',
+    ArrowLeft: 'Left',
+    ArrowRight: 'Right',
+  };
+
+  const DIRECT_VT_KEYS: Record<string, string> = {
+    Home: '\x1b[H',
+    End: '\x1b[F',
+    Delete: '\x1b[3~',
+    PageUp: '\x1b[5~',
+    PageDown: '\x1b[6~',
+    Insert: '\x1b[2~',
+  };
+
+  function pushDirectCommand(command: Omit<QueuedKeyCommand, 'resolve'>) {
+    if (readOnly) return;
+    // Coalesce consecutive typed text so a burst of characters travels as one
+    // send_input instead of one request per keystroke.
+    const tail = keyQueue[keyQueue.length - 1];
+    if (command.kind === 'input' && !command.keys?.length && command.text
+      && tail?.kind === 'input' && !tail.keys?.length && tail.text) {
+      tail.text += command.text;
+    } else {
+      keyQueue.push({ ...command, resolve: () => {} });
+    }
+    void drainKeyQueue();
+  }
+
+  function directSendText(text: string) {
+    if (!text) return;
+    if (text.length === 1) {
+      const chord = modifierChord(text);
+      if (chord) {
+        pushDirectCommand({ kind: 'keys', keys: [chord.chord], label: chord.label });
+        return;
+      }
+    }
+    pushDirectCommand({ kind: 'input', text, label: '' });
+  }
+
+  function directSendKey(key: string, label = key) {
+    const chord = modifierChord(key);
+    if (chord) {
+      pushDirectCommand({ kind: 'keys', keys: [chord.chord], label: chord.label });
+      return;
+    }
+    const semantic = DIRECT_INPUT_KEYS[key];
+    if (semantic) {
+      pushDirectCommand({ kind: 'input', keys: [semantic], label });
+      return;
+    }
+    if (/^f(?:[1-9]|1[0-9]|2[0-4])$/i.test(key)) {
+      pushDirectCommand({ kind: 'input', keys: [key.toUpperCase()], label: key.toUpperCase() });
+      return;
+    }
+    const sequence = DIRECT_VT_KEYS[key];
+    if (sequence) {
+      pushDirectCommand({ kind: 'text', text: sequence, label });
+      return;
+    }
+    // Last resort: hand the name to send_keys and let Herdr decide.
+    pushDirectCommand({ kind: 'keys', keys: [key], label });
+  }
+
+  function focusDirectCapture() {
+    if (!directInput || readOnly || !directInputElement) return;
+    if (document.activeElement === directInputElement) return;
+    directInputElement.focus();
+  }
+
+  function terminalSurfaceClick(event: MouseEvent) {
+    if (!directInput) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('a,button,input,textarea')) return;
+    focusDirectCapture();
+  }
+
+  function toggleDirectInput() {
+    if (readOnly) return;
+    directInput = !directInput;
+    if (directInput) {
+      void tick().then(() => focusDirectCapture());
+    } else {
+      directInputElement?.blur();
+    }
+  }
+
+  function directKeydown(event: KeyboardEvent) {
+    if (event.isComposing) return;
+    const key = event.key;
+    if (key === 'Backspace') {
+      event.preventDefault();
+      directBackspaceAt = Date.now();
+      directSendKey('Backspace');
+      return;
+    }
+    if (key === 'Enter' || key === 'Escape' || key === 'Tab'
+      || key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight'
+      || key === 'Home' || key === 'End' || key === 'Delete'
+      || key === 'PageUp' || key === 'PageDown' || key === 'Insert'
+      || /^F\d{1,2}$/.test(key)) {
+      event.preventDefault();
+      directSendKey(key);
+      return;
+    }
+    // Hardware keyboards report real modifier state; fold it into a chord so
+    // Ctrl+C and friends reach the pane as keys, not control characters.
+    if ((event.ctrlKey || event.metaKey || event.altKey) && key.length === 1) {
+      event.preventDefault();
+      const parts: string[] = [];
+      if (event.ctrlKey || event.metaKey) parts.push('ctrl');
+      if (event.altKey) parts.push('alt');
+      if (event.shiftKey && /[a-z]/i.test(key)) parts.push('shift');
+      parts.push(key.toLocaleLowerCase());
+      pushDirectCommand({ kind: 'keys', keys: [parts.join('+')], label: parts.join('+') });
+    }
+  }
+
+  function directInputEvent(event: Event) {
+    const target = event.currentTarget as HTMLTextAreaElement;
+    const input = event as InputEvent;
+    if (directComposing || input.isComposing) return;
+    const type = input.inputType || '';
+    if (type.startsWith('delete')) {
+      // Some IMEs deliver Backspace only as an input event; the keydown path
+      // already sent one within the same tick, so dedupe by timestamp.
+      if (Date.now() - directBackspaceAt > 50) directSendKey('Backspace');
+    } else if (type === 'insertParagraph' || type === 'insertLineBreak') {
+      directSendKey('Enter');
+    } else {
+      const data = input.data ?? target.value;
+      if (data === '\n' || data === '\r\n') {
+        directSendKey('Enter');
+      } else if (data) {
+        directSendText(data);
+      }
+    }
+    target.value = '';
+  }
+
+  function directCompositionStart() {
+    directComposing = true;
+  }
+
+  function directCompositionEnd(event: CompositionEvent) {
+    directComposing = false;
+    const target = event.currentTarget as HTMLTextAreaElement;
+    const data = event.data || target.value;
+    target.value = '';
+    if (data) directSendText(data);
   }
 
 
@@ -2048,6 +2267,12 @@
     <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path>
   </svg>
 {/snippet}
+{#snippet keyboardIcon()}
+  <svg class="action-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <rect x="2" y="5" width="20" height="14" rx="2"></rect>
+    <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M9 13h6M7 17h10"></path>
+  </svg>
+{/snippet}
 {#snippet findPreviousIcon()}
   <svg class="find-action-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="m6 15 6-6 6 6"></path>
@@ -2168,6 +2393,9 @@
     </section>
   {/if}
   <div class="term-wrap">
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+    <!-- Tap-to-focus only raises the software keyboard for the hidden capture
+         field; the log itself stays a non-interactive scroll region. -->
   <div
     class:resize-layout={resizeLayoutActive} class:resize-pending={resizeLayoutPending}
     class="term-content preserve-layout"
@@ -2177,6 +2405,7 @@
     aria-label="Agent terminal output"
     onscroll={handleScroll}
     onscrollcapture={syncWideGridScroll}
+    onclick={terminalSurfaceClick}
   >
     <span
       bind:this={cellMeasureElement}
@@ -2196,6 +2425,24 @@
   </div>
     {#if jumpVisible}
       <button class="jump-bottom" aria-label="Jump to latest" onclick={jumpToBottom}>↓</button>
+    {/if}
+    {#if directInput}
+      <textarea
+        class="direct-capture"
+        bind:this={directInputElement}
+        aria-label="Direct terminal input"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="none"
+        spellcheck="false"
+        enterkeyhint="send"
+        tabindex="-1"
+        rows="1"
+        onkeydown={directKeydown}
+        oninput={directInputEvent}
+        oncompositionstart={directCompositionStart}
+        oncompositionend={directCompositionEnd}
+      ></textarea>
     {/if}
   </div>
   <textarea
@@ -2232,6 +2479,16 @@
     </section>
   {/if}
   <div class="terminal-copy">
+    {#if !readOnly}
+      <Button
+        variant={directInput ? 'default' : 'secondary'}
+        size="sm"
+        aria-label={directInput ? 'Stop typing directly into the terminal' : 'Type directly into the terminal'}
+        aria-pressed={directInput}
+        title={directInput ? 'Stop direct typing' : 'Type directly into the terminal'}
+        onclick={toggleDirectInput}
+      >{@render keyboardIcon()}<span class="direct-type-label">{directInput ? 'Typing' : 'Type'}</span></Button>
+    {/if}
     <Button
       variant="secondary"
       size="sm"
@@ -2255,6 +2512,12 @@
   </div>
 
   <div class="terminal-bottom" onfocusin={focusComposer} onfocusout={blurComposer}>
+    {#if directInput}
+      <div class="direct-input-bar" role="status">
+        <span>Typing straight into the terminal — tap the screen to bring up the keyboard.</span>
+        <Button variant="secondary" size="sm" onclick={toggleDirectInput}>Done</Button>
+      </div>
+    {/if}
     {#if slashMenuOpen}
       <section class="slash-command-popover" aria-label="Command suggestions">
         <header class="slash-command-header">
@@ -2374,6 +2637,8 @@
           bind:value={composer}
           rows="1"
           disabled={composerLocked}
+          readonly={$dictationState === 'listening'}
+          inputmode={$dictationState === 'listening' ? 'none' : undefined}
           placeholder={approvalMode
             ? 'Approval pending — use buttons'
             : terminalTextMode
@@ -2399,7 +2664,27 @@
         ></textarea>
         {#if composer}<button class="input-clear" aria-label="Clear prompt text" onclick={clearComposer}>×</button>{/if}
       </div>
+      <div class="send-stack">
+      {#if dictationSupported}
+        <Button
+          variant={$dictationState === 'listening' ? 'default' : 'ghost'}
+          size="icon"
+          class={$dictationState === 'listening' ? 'listening' : undefined}
+          disabled={composerLocked}
+          aria-label={$dictationState === 'listening' ? 'Stop dictation' : 'Dictate prompt'}
+          aria-pressed={$dictationState === 'listening'}
+          title={$dictationState === 'listening' ? 'Stop dictation' : 'Dictate with the phone microphone'}
+          onclick={toggleDictation}
+        >
+          <svg class="button-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+            <path d="M5 10a7 7 0 0 0 14 0"></path>
+            <path d="M12 17v5"></path>
+          </svg>
+        </Button>
+      {/if}
       <Button size="icon" disabled={!composer.replace(/[\r\n]+$/g, '') || composerLocked || sendingPrompt || uploadingAttachment} aria-label={sendingPrompt ? 'Submitting input' : terminalTextMode === 'filter' ? 'Send filter text' : inspectionMode ? 'Submit terminal text' : 'Send prompt'} onclick={sendPrompt}>{sendingPrompt ? '…' : '➤'}</Button>
+      </div>
       <input bind:this={imageInput} type="file" accept="image/*" multiple hidden onchange={(event) => { void filesSelected(event.currentTarget.files || []); event.currentTarget.value = ''; }} />
       <input bind:this={fileInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp,text/plain,text/markdown,text/csv,application/json,application/pdf,.docx,.xlsx,.pptx,.odt,.ods,.odp" multiple hidden onchange={(event) => { void filesSelected(event.currentTarget.files || []); event.currentTarget.value = ''; }} />
     </div>

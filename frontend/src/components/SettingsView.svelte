@@ -3,15 +3,22 @@
   import DeviceSettings from '$components/DeviceSettings.svelte';
   import NotificationSettings from '$components/NotificationSettings.svelte';
   import AppDialog from '$components/ui/AppDialog.svelte';
+  import AppSelect from '$components/ui/AppSelect.svelte';
+  import ColorPicker from '$components/ui/ColorPicker.svelte';
   import AppSwitch from '$components/ui/AppSwitch.svelte';
   import Button from '$components/ui/Button.svelte';
   import Card from '$components/ui/Card.svelte';
   import {
+    ACCENT_LABELS,
+    ACCENT_SWATCHES,
+    ACCENTS,
     AGENT_VIEW_LABELS,
     AGENT_VIEWS,
     APP_ASSET_VERSION,
     APP_BUILD_ID,
     APP_VERSION,
+    APPEARANCE_LABELS,
+    APPEARANCES,
     canInviteFrom,
     HOME_LAYOUTS,
     HOME_LAYOUT_LABELS,
@@ -19,29 +26,41 @@
     TERMINAL_HISTORY_OPTIONS,
     TERMINAL_REFRESH_LABELS,
     TERMINAL_REFRESH_OPTIONS,
+    THEME_LABELS,
     THEMES,
     type AgentView,
     type HomeLayout,
     type InterfaceSize,
     type TerminalHistoryLines,
     type TerminalRefreshInterval,
-    type Theme,
   } from '$lib/config';
   import {
     setSpeechEnabled,
+    setSpeechEngine,
     setSpeechLanguage,
+    setSpeechRate,
     SPEECH_LANGUAGES,
     speechEnabled,
+    speechEngine,
     speechLanguage,
+    speechRate,
     speechLanguageLabel,
     speechState,
     stopSpeech,
   } from '$lib/speech';
   import {
+    accent,
+    appearance,
     defaultAgentView,
+    customAccent,
+    defaultDirectories,
     homeLayout,
     interfaceSize,
+    setAccent,
+    setAppearance,
+    setCustomAccent,
     setDefaultAgentView,
+    setDefaultDirectory,
     setHomeLayout,
     setInterfaceSize,
     setTerminalHeightLease,
@@ -121,17 +140,11 @@
       .join(' · ');
   }
 
-  const APP_DEPLOY_SETUP_COMMAND = 'herdr plugin action invoke configure-app-deploy --plugin herdr-mobile-relay.events';
-
-
   type SafeUpdateAction =
     | {
-      kind: 'deploy_app' | 'install_relay';
+      kind: 'install_relay';
       relayId: string;
       targetVersion: string;
-      appRelayId: string;
-      phoneAppRequired: boolean;
-      phoneTarget: { version: string; assets: number; build: string } | null;
       description: string;
     }
     | {
@@ -150,13 +163,6 @@
   const pushPolicies = relayStore.pushPolicies;
   const pushTests = relayStore.pushTests;
   const appUpdate = appUpdateStatus;
-  function appPhoneTarget(version: string) {
-    return {
-      version,
-      assets: $appUpdate.deployedVersion === version ? $appUpdate.deployedAssets : 0,
-      build: $appUpdate.deployedVersion === version ? ($appUpdate.deployedBuild || '') : '',
-    };
-  }
   let previousAppUpdate = $state<AppUpdateStatus | null>(null);
   let checkingUpdates = $state(false);
   const appUpdateChecking = $derived(checkingUpdates || $appUpdate.state === 'checking');
@@ -192,6 +198,8 @@
   let removalRelayId = $state('');
   let removalOpen = $state(false);
   let busyRelayId = $state('');
+  let renamingRelayId = $state('');
+  let renamingLabel = $state('');
   let speechVoiceBusy = $state<string[]>([]);
   const speechVoiceRequested = new Set<string>();
   function isReadOnlyRelay(relayId: string): boolean {
@@ -202,6 +210,15 @@
     relay,
     connection: $connections.get(relay.id),
   })));
+  function startRelayRename(relayId: string, label: string) {
+    renamingRelayId = relayId;
+    renamingLabel = label;
+  }
+  function commitRelayRename() {
+    if (renamingRelayId) relayStore.renameRelay(renamingRelayId, renamingLabel);
+    renamingRelayId = '';
+    renamingLabel = '';
+  }
   const connectedCount = $derived([...$connections.values()].filter((connection) => connection.status === 'connected').length);
   const degradedCount = $derived([...$connections.values()].filter(
     (connection) => connection.status === 'connected' && connection.inventory.state !== 'ready',
@@ -214,30 +231,8 @@
     && connection.capabilities.includes('speech_voice_management')));
   const manualRow = $derived(relayRows.find(({ relay }) => relay.id === manualRelayId));
   const removalRow = $derived(relayRows.find(({ relay }) => relay.id === removalRelayId));
-  const appDeploymentOwner = $derived(relayRows.find(({ relay, connection }) => (
-    !isReadOnlyRelay(relay.id)
-    && connection?.status === 'connected'
-    && connection.capabilities.includes('app_deploy')
-    && connection.appDeploy.configured
-    && connection.appDeploy.origin === location.origin
-  )));
-  // The owner relay is behind the released app version but can self-update to
-  // exactly that version, so one action can deploy the app before updating it.
-  const ownerUpdateReady = $derived.by(() => {
-    const connection = appDeploymentOwner?.connection;
-    if (!connection
-      || connection.releaseVersion === $appUpdate.upstreamVersion
-      || relayNeedsManualBootstrap(connection)) return false;
-    const update = connection.update;
-    return connection.capabilities.includes('self_update')
-      && update.state === 'available'
-      && update.can_install
-      && Boolean(update.target_revision)
-      && update.available_version === $appUpdate.upstreamVersion;
-  });
   const safeUpdateAction = $derived.by((): SafeUpdateAction | null => {
     if (appUpdateChecking || $appUpdate.state === 'failed') return null;
-    const targetVersion = $appUpdate.upstreamVersion;
     if ($appUpdate.state === 'reload-ready') {
       return {
         kind: 'reload_app',
@@ -250,33 +245,6 @@
         description: `Load the verified phone app v${$appUpdate.deployedVersion}.`,
       };
     }
-    if ($appUpdate.state === 'deployment-required') {
-      const owner = appDeploymentOwner;
-      if (!owner?.connection || !targetVersion) return null;
-      if (owner.connection.releaseVersion === targetVersion
-        && ['scheduled', 'deploying'].includes(owner.connection.appDeploy.state)) return null;
-      if (owner.connection.releaseVersion === targetVersion) {
-        return {
-          kind: 'deploy_app',
-          relayId: owner.relay.id,
-          targetVersion,
-          appRelayId: owner.relay.id,
-          phoneAppRequired: true,
-          phoneTarget: appPhoneTarget(targetVersion),
-          description: `Publish the phone app from ${owner.relay.label}, then continue with any remaining relay updates.`,
-        };
-      }
-      if (!ownerUpdateReady) return null;
-      return {
-        kind: 'install_relay',
-        relayId: owner.relay.id,
-        targetVersion,
-        appRelayId: owner.relay.id,
-        phoneAppRequired: true,
-        phoneTarget: appPhoneTarget(targetVersion),
-        description: `Publish the phone app first, then update ${owner.relay.label} and continue with the remaining relays.`,
-      };
-    }
     const installable = relayRows.filter(({ relay, connection }) => (
       !isReadOnlyRelay(relay.id)
       && connection?.status === 'connected'
@@ -286,15 +254,12 @@
       && connection.update.can_install
       && Boolean(connection.update.target_revision)
     ));
-    const selected = installable.find(({ relay }) => relay.id === appDeploymentOwner?.relay.id) || installable[0];
+    const selected = installable[0];
     if (!selected?.connection) return null;
     return {
       kind: 'install_relay',
       relayId: selected.relay.id,
       targetVersion: selected.connection.update.available_version,
-      appRelayId: '',
-      phoneAppRequired: false,
-      phoneTarget: null,
       description: `Update ${selected.relay.label} first, then continue safely with each remaining relay.`,
     };
   });
@@ -309,8 +274,7 @@
       && relayNeedsManualBootstrap(connection),
   ).length);
   const updatePending = $derived(
-    $appUpdate.state === 'deployment-required'
-      || $appUpdate.state === 'reload-ready'
+    $appUpdate.state === 'reload-ready'
       || relayRows.some(({ connection }) => connection?.update.state === 'available'),
   );
   const notificationScopes = $derived.by((): NotificationPolicyScope[] => relayRows.flatMap(({ relay }) => {
@@ -356,9 +320,7 @@
 
   function updateActionLabel(action: SafeUpdateAction | null): string {
     if (action?.kind === 'reload_app') return 'Load Update';
-    if (action?.kind === 'install_relay' && !action.appRelayId) return 'Update Relays';
-    if (!action && $appUpdate.state !== 'deployment-required') return 'Update Relays';
-    return 'Update Herdr';
+    return 'Update Relays';
   }
 
   function addRelay(event: SubmitEvent) {
@@ -447,8 +409,12 @@
     const checked = update.checked_at
       ? `Checked ${new Date(update.checked_at * 1_000).toLocaleString()}`
       : 'Update check pending';
+    if (update.state === 'current' && update.reason) {
+      return { label: 'Updates managed locally', detail: update.reason, warning: false };
+    }
     return { label: 'Up to date', detail: checked, warning: false };
   }
+
 
   async function checkRelayUpdate(relayId: string) {
     busyRelayId = relayId;
@@ -522,22 +488,11 @@
         .map(({ relay }) => relay.id)
         .filter((relayId) => relayId !== action.relayId && !isReadOnlyRelay(relayId)),
     ];
-    beginUpdateProgress(action.targetVersion, relayIds, action.relayId, action.appRelayId, {
-      phoneAppRequired: action.phoneAppRequired,
-      phoneTarget: action.phoneTarget,
-      phoneState: action.phoneAppRequired ? 'publishing' : 'loaded',
-    });
+    beginUpdateProgress(action.targetVersion, relayIds, action.relayId);
     busyRelayId = action.relayId;
     try {
-      if (action.kind === 'deploy_app') {
-        await relayStore.deployAppUpdate(action.relayId, action.targetVersion);
-        relayStore.showToast('Publishing the phone app. This screen will resume after it reloads.');
-      } else {
-        await relayStore.installRelayUpdate(action.relayId);
-        relayStore.showToast(action.appRelayId
-          ? 'Publishing the phone app before safely updating its relay.'
-          : 'Update scheduled. Remaining relays will follow.');
-      }
+      await relayStore.installRelayUpdate(action.relayId);
+      relayStore.showToast('Update scheduled. Remaining relays will follow.');
     } catch (error) {
       relayStore.showToast((error as Error).message, true);
       setUpdateProgressError(action.relayId, error);
@@ -670,7 +625,27 @@
             aria-label={`${relay.label} relay ${connectionStatus}`}
           ></span>
           <div class="relay-info">
-            <strong>{relay.label}</strong>
+            {#if renamingRelayId === relay.id}
+              <input
+                class="relay-rename-input"
+                bind:value={renamingLabel}
+                maxlength="128"
+                aria-label={`Rename ${relay.label}`}
+                onkeydown={(event) => {
+                  if (event.key === 'Enter') { event.preventDefault(); commitRelayRename(); }
+                  if (event.key === 'Escape') { renamingRelayId = ''; renamingLabel = ''; }
+                }}
+                onblur={commitRelayRename}
+              />
+            {:else}
+              <button
+                class="relay-name-button"
+                type="button"
+                title="Rename this machine"
+                aria-label={`Rename ${relay.label}`}
+                onclick={() => startRelayRename(relay.id, relay.label)}
+              ><strong>{relay.label}</strong></button>
+            {/if}
             {#if connectionPath}<small>Connection: {connectionPath}</small>{/if}
             {#if gateways.length}
               <small>Gateway: {connection?.gatewayVersion || 'unknown'} · Latest: {connection?.update.available_version || connection?.gatewayAvailableVersion || connection?.releaseVersion || 'unknown'}</small>
@@ -720,6 +695,18 @@
             {/if}
             <small class:warning={update.warning} role="status">{update.label}</small>
             {#if update.detail}<small class:warning={update.warning} title={update.detail}>{update.detail}</small>{/if}
+            <label class="relay-default-dir">
+              <span>Default directory</span>
+              <input
+                type="text"
+                value={$defaultDirectories[relay.id] || ''}
+                placeholder="Home folder"
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+                onchange={(event) => setDefaultDirectory(relay.id, event.currentTarget.value)}
+              />
+            </label>
           </div>
           <div class="relay-actions">
             {#if connectionStatus === 'connected' && manualUpdate}
@@ -771,7 +758,7 @@
 
   <Card>
     <h3>Agents</h3>
-    <fieldset class="choice-grid compact-grid">
+    <fieldset class="choice-grid">
       <legend>Default View</legend>
       {#each AGENT_VIEWS as item (item)}
         <button
@@ -788,18 +775,39 @@
   <Card>
     <h3>Appearance</h3>
     <fieldset class="choice-grid">
-      <legend>Theme</legend>
-      {#each THEMES as item (item)}
-        <button class:active={$theme === item} type="button" aria-pressed={$theme === item} onclick={() => setTheme(item as Theme)}>{item}</button>
+      <legend>Appearance</legend>
+      {#each APPEARANCES as item (item)}
+        <button class:active={$appearance === item} type="button" aria-pressed={$appearance === item} onclick={() => setAppearance(item)}>{APPEARANCE_LABELS[item]}</button>
       {/each}
     </fieldset>
-    <fieldset class="choice-grid compact-grid">
+    <fieldset class="choice-grid">
+      <legend>Theme</legend>
+      {#each THEMES as item (item)}
+        <button class:active={$theme === item} type="button" aria-pressed={$theme === item} onclick={() => setTheme(item)}>
+          <span class="theme-swatch" style={`background: ${ACCENT_SWATCHES[item === 'neutral' ? 'ember' : item]}`} aria-hidden="true"></span>{THEME_LABELS[item]}
+        </button>
+      {/each}
+    </fieldset>
+    <fieldset class="choice-grid">
+      <legend>Accent</legend>
+      {#each ACCENTS as item (item)}
+        <button class:active={$accent === item} type="button" aria-pressed={$accent === item} onclick={() => setAccent(item)}>
+          {#if item === 'custom'}<span class="theme-swatch" style={`background: ${$customAccent}`} aria-hidden="true"></span>
+          {:else if item !== 'theme'}<span class="theme-swatch" style={`background: ${ACCENT_SWATCHES[item]}`} aria-hidden="true"></span>{/if}{ACCENT_LABELS[item]}
+        </button>
+      {/each}
+    </fieldset>
+    {#if $accent === 'custom'}
+      <p class="field-label settings-field">Custom accent</p>
+      <ColorPicker value={$customAccent} ariaLabel="Custom accent color" onchange={setCustomAccent} />
+    {/if}
+    <fieldset class="choice-grid">
       <legend>Interface Size</legend>
       {#each INTERFACE_SIZES as item (item)}
         <button class:active={$interfaceSize === item} type="button" aria-pressed={$interfaceSize === item} onclick={() => setInterfaceSize(item as InterfaceSize)}>{item.charAt(0).toUpperCase() + item.slice(1)}</button>
       {/each}
     </fieldset>
-    <fieldset class="choice-grid compact-grid">
+    <fieldset class="choice-grid">
       <legend>Home Workspaces</legend>
       {#each HOME_LAYOUTS as item (item)}
         <button
@@ -811,7 +819,7 @@
       {/each}
     </fieldset>
     <p class="hint">By State separates Done, Working, and Idle workspace sections. Mixed shows each workspace once with a dot for its most notable session: done, then working, then idle. Agents needing input always stay on top.</p>
-    <fieldset class="choice-grid history-grid">
+    <fieldset class="choice-grid">
       <legend>Terminal History</legend>
       {#each TERMINAL_HISTORY_OPTIONS as item (item)}
         <button
@@ -823,7 +831,7 @@
       {/each}
     </fieldset>
     <p class="hint">Lines kept in the terminal view. Direct connections honor the selected limit; gateway transport caps each read at 1,000 lines to bound relayed traffic. Use Copy or Conversation History for clean response text.</p>
-    <fieldset class="choice-grid history-grid refresh-grid">
+    <fieldset class="choice-grid refresh-grid">
       <legend>Terminal Refresh</legend>
       {#each TERMINAL_REFRESH_OPTIONS as item (item)}
         <button
@@ -858,16 +866,37 @@
     />
     <p class="hint" id="speech-hint">Enabled automatically the first time a connected relay offers a compatible voice; after that, this setting remains under your control. Adds a Speak button next to Copy in the Terminal and Conversation History views. The relay synthesizes each response with its own neural voice and streams the audio here encrypted, so reading continues while the screen is off. Response text never reaches a third-party speech server.</p>
     <label class="field-label settings-field" for="speech-language">Language</label>
-    <select
+    <AppSelect
       id="speech-language"
       disabled={!$speechEnabled}
-      value={$speechLanguage}
-      onchange={(event) => setSpeechLanguage(event.currentTarget.value)}
-    >
-      {#each SPEECH_LANGUAGES as language (language.code)}
-        <option value={language.code}>{language.label}</option>
-      {/each}
-    </select>
+      options={SPEECH_LANGUAGES.map((language) => ({ value: language.code, label: language.label }))}
+      bind:value={$speechLanguage}
+      aria-label="Speech language"
+      onchange={(value) => setSpeechLanguage(value)}
+    />
+    <label class="field-label settings-field" for="speech-engine">Voice</label>
+    <AppSelect
+      id="speech-engine"
+      disabled={!$speechEnabled}
+      options={[
+        { value: 'relay', label: 'Relay neural voice (plays with screen off)' },
+        { value: 'device', label: "This phone's voice (starts instantly)" },
+      ]}
+      bind:value={$speechEngine}
+      aria-label="Speech voice"
+      onchange={(value) => setSpeechEngine(value as 'relay' | 'device')}
+    />
+    <label class="field-label settings-field" for="speech-rate">Speed <span class="hint-inline">{$speechRate.toFixed(2)}×</span></label>
+    <input
+      id="speech-rate"
+      type="range"
+      min="0.5"
+      max="2.5"
+      step="0.05"
+      disabled={!$speechEnabled}
+      value={$speechRate}
+      oninput={(event) => setSpeechRate(Number(event.currentTarget.value))}
+    />
     {#if $speechState === 'error'}
       <p class="hint error" role="alert">Reading aloud failed. Check the relay's voice below, then try again.</p>
     {/if}
@@ -950,32 +979,6 @@
       <div class:app-update-status-hidden={appUpdateChecking} aria-hidden={appUpdateChecking}>
         {#if appUpdateForLayout.state === 'reload-ready'}
           <p class="warning" role="status">Version {appUpdateForLayout.deployedVersion} is deployed to this app origin and ready to load.</p>
-        {:else if appUpdateForLayout.state === 'deployment-required'}
-          <p class="warning" role="status">
-            Version {appUpdateForLayout.upstreamVersion} is released, but this app origin still serves {appUpdateForLayout.deployedVersion}.
-          </p>
-          {#if appDeploymentOwner}
-            {#if ['scheduled', 'preparing', 'deploying_app', 'installing', 'restarting'].includes(appDeploymentOwner.connection?.update.state || '')}
-              <p class="hint" role="status">Publishing v{appUpdateForLayout.upstreamVersion} and waiting for this app origin to update. This can take up to two minutes; the relay remains online.</p>
-            {:else if ['scheduled', 'deploying'].includes(appDeploymentOwner.connection?.appDeploy.state || '')}
-              <p class="hint" role="status">Publishing v{appUpdateForLayout.upstreamVersion} from {appDeploymentOwner.relay.label} and waiting for this app origin to update. This can take up to two minutes.</p>
-            {:else if appDeploymentOwner.connection?.appDeploy.state === 'failed'}
-              <p class="warning" role="status">Deployment failed: {appDeploymentOwner.connection.appDeploy.error}</p>
-            {:else if appDeploymentOwner.connection?.releaseVersion !== appUpdateForLayout.upstreamVersion}
-              {#if appDeploymentOwner.connection && relayNeedsManualBootstrap(appDeploymentOwner.connection)}
-                <p class="warning" role="status">{appDeploymentOwner.relay.label} needs the one-time Terminal bootstrap shown in Update Help before it can deploy this app version.</p>
-              {:else if ownerUpdateReady}
-                <p class="hint">{appDeploymentOwner.relay.label} can deploy the app and update to {appUpdateForLayout.upstreamVersion} in one safe step.</p>
-              {:else}
-                <p class="hint">No installable v{appUpdateForLayout.upstreamVersion} relay update is available from {appDeploymentOwner.relay.label} yet.</p>
-              {/if}
-            {:else}
-              <p class="hint">{appDeploymentOwner.relay.label} is authorized to deploy this app origin.</p>
-            {/if}
-          {:else}
-            <p class="hint">This is a separately hosted app. Configure one relay as its deployment owner:</p>
-            <pre class="update-command"><code>{APP_DEPLOY_SETUP_COMMAND}</code></pre>
-          {/if}
         {:else if appUpdateForLayout.state === 'checking'}
           <p class="hint" role="status">Checking this app origin and the upstream release…</p>
         {:else if appUpdateForLayout.state === 'failed'}

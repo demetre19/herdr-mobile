@@ -34,6 +34,7 @@
     defaultAgentView,
     initializePreferences,
     paneAgentViewOverrides,
+    readWorkspaceDisclosure,
   } from '$lib/preferences';
   import { initializeSpeech, stopSpeech } from '$lib/speech';
   import { initializePush, notificationsEnabled, pushOptedIn, showPageNotification } from '$lib/push';
@@ -75,7 +76,7 @@
   let terminalView = $state<{ openFind: () => void } | null>(null);
   let jumpOpen = $state(false);
   let workspaceOpen = $state(false);
-  let workspaceDisclosure = $state<Record<string, boolean>>({});
+  let workspaceDisclosure = $state<Record<string, boolean>>(readWorkspaceDisclosure());
   let lastBlocked = new Set<string>();
   let previousView = '';
   let terminalUnavailable = $state(false);
@@ -129,7 +130,7 @@
   const inventoryLoading = $derived([...$connections.values()].filter(
     (connection) => connection.status === 'connected' && connection.inventory.state === 'starting',
   ).length);
-  const appUpdateAvailable = $derived(['reload-ready', 'deployment-required'].includes($appUpdates.state));
+  const appUpdateAvailable = $derived($appUpdates.state === 'reload-ready');
   const relayUpdateAvailable = $derived(
     [...$connections.values()].some((connection) => connection.update.state === 'available'),
   );
