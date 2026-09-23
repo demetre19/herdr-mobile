@@ -355,6 +355,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .nav-update-badge { background: var(--warning); border: 2px solid var(--background); border-radius: 50%; height: .62rem; pointer-events: none; position: absolute; right: .16rem; top: .16rem; width: .62rem; }
 .app-header.home-header > .status-dot { margin-inline-start: 1rem; }
 .header-title { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.header-brand { align-items: center; display: flex; gap: .45rem; min-width: 0; }
+.header-brand .brand-logo { color: var(--foreground); flex: 0 0 auto; }
 .header-title h1 { font-size: 1rem; line-height: 1.2; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .header-title span { color: var(--muted); font-size: .68rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-count { color: var(--muted); font-size: .68rem; white-space: nowrap; }

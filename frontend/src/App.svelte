@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import ActivityDetail from '$components/ActivityDetail.svelte';
+  import BrandLogo from '$components/ui/BrandLogo.svelte';
   import ActivityView from '$components/ActivityView.svelte';
   import AgentList from '$components/AgentList.svelte';
   import AgentRail from '$components/AgentRail.svelte';
@@ -159,7 +160,7 @@
     if ($currentView.view === 'activity_detail') return 'Activity';
     if (activeAgent) return activeAgent.project || displayName(activeAgent);
     if ($currentView.view === 'terminal') return 'Terminal';
-    return '🐑 herdr';
+    return 'herdr';
   });
   const headerMeta = $derived(activeAgent ? terminalSecondaryLabel(activeAgent) : '');
   const headerIndicator = $derived.by(() => {
@@ -585,7 +586,10 @@
       aria-label={headerIndicator.label}
     ></span>
     <div class="header-title">
-      <h1>{headerTitle}</h1>
+      <div class="header-brand">
+        {#if headerTitle === 'herdr'}<BrandLogo size={20} />{/if}
+        <h1>{headerTitle}</h1>
+      </div>
       {#if headerMeta}<span>{headerMeta}</span>{/if}
     </div>
     {#if $currentView.view === 'agents'}<span class="agent-count">{connected}/{$relays.length} relays{#if $agents.length} · {$agents.length}{/if}</span>{/if}
