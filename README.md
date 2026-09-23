@@ -19,10 +19,10 @@ conversation history, manage workspaces and Git worktrees, and have responses
 read aloud — all end-to-end encrypted.
 
 <p>
-  <img src="docs/screenshots/home.jpg" alt="Home screen with pinned conversations and workspaces" width="24%">
   <img src="docs/screenshots/workspaces.jpg" alt="Workspace manager" width="24%">
-  <img src="docs/screenshots/jump-to-agent.jpg" alt="Jump to agent search" width="24%">
   <img src="docs/screenshots/settings.jpg" alt="Settings with theme and accent pickers" width="24%">
+  <img src="docs/screenshots/start-agent.jpg" alt="Start Agent with agent picker open" width="24%">
+  <img src="docs/screenshots/home.jpg" alt="Home screen with pinned conversations and workspaces" width="24%">
 </p>
 
 ## How it works
