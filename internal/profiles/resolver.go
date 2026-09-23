@@ -406,8 +406,20 @@ func expandedPaths(paths []string) []string {
 }
 
 func binaryPath(name string) (string, bool) {
-	path, err := exec.LookPath(name)
-	return path, err == nil
+	if path, err := exec.LookPath(name); err == nil {
+		return path, true
+	}
+	// Services launched by launchd/systemd inherit a minimal PATH that omits
+	// user-local bins; probe the standard install locations before giving up.
+	if home, err := os.UserHomeDir(); err == nil {
+		for _, dir := range []string{filepath.Join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"} {
+			candidate := filepath.Join(dir, name)
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+				return candidate, true
+			}
+		}
+	}
+	return "", false
 }
 
 func cloneAliases(source map[string]string) map[string]string {

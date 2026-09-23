@@ -33,7 +33,11 @@ const (
 
 func prepareTargetRelease(ctx context.Context, job Job) (stagedRelease, error) {
 	client := &http.Client{Timeout: 2 * time.Minute}
-	return prepareTargetReleaseFrom(ctx, job, canonicalReleaseAssets, client)
+	assetBase := strings.TrimSpace(job.AssetBase)
+	if assetBase == "" {
+		assetBase = canonicalReleaseAssets
+	}
+	return prepareTargetReleaseFrom(ctx, job, assetBase, client)
 }
 
 func prepareTargetReleaseFrom(

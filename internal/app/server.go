@@ -706,7 +706,9 @@ func (s *Server) Run(ctx context.Context) error {
 			s.hub.Broadcast(map[string]any{"type": "update_status", "update": updateState})
 			s.sendCommandResult(client, inbound.RequestID, "check_update", true, "completed", "", "", map[string]any{"update": updateState})
 		case "install_update":
-			deployAppFirst := s.appDeployM.Required()
+			// This build deploys the phone app manually; a relay self-update
+			// never publishes the embedded upstream bundle over it.
+			deployAppFirst := false
 			expectedAppOrigin := ""
 			if deployAppFirst {
 				if originErr := s.appDeployM.ValidateOrigin(inbound.ExpectedOrigin); originErr != nil {
@@ -729,13 +731,9 @@ func (s *Server) Run(ctx context.Context) error {
 			s.hub.Broadcast(map[string]any{"type": "update_status", "update": updateState})
 			s.sendCommandResult(client, inbound.RequestID, "install_update", true, "scheduled", "", "", map[string]any{"job": job, "update": updateState})
 		case "deploy_app_update":
-			job, deployState, scheduleErr := s.appDeployM.Schedule(ctx, inbound.ExpectedVersion, inbound.ExpectedRevision, inbound.ExpectedOrigin)
-			if scheduleErr != nil {
-				s.sendCommandResult(client, inbound.RequestID, "deploy_app_update", false, "failed", scheduleErr.Error(), "", map[string]any{"app_deploy": deployState})
-				break
-			}
-			s.hub.Broadcast(map[string]any{"type": "app_deploy_status", "app_deploy": deployState})
-			s.sendCommandResult(client, inbound.RequestID, "deploy_app_update", true, "scheduled", "", "", map[string]any{"job": job, "app_deploy": deployState})
+			// This build deploys the phone app manually; the embedded upstream
+			// bundle must never overwrite the deployed origin.
+			s.sendCommandResult(client, inbound.RequestID, "deploy_app_update", false, "failed", "App deployment is managed manually on this build", "", map[string]any{"app_deploy": s.appDeployM.State()})
 		case "lease_pane_size":
 			columns, rows, leaseErr := s.paneSizeM.Acquire(client.Context(), client.ID(), inbound.PaneID, inbound.Columns, inbound.Rows)
 			if leaseErr != nil {
@@ -2134,14 +2132,14 @@ func (s *Server) handleConversationHistory(client *transport.ClientConn, inbound
 	action := "get_conversation_history"
 	agent, exists := s.state.Agent(inbound.PaneID)
 	if !exists {
-		s.sendCommandResult(client, inbound.RequestID, action, false, "failed", "Agent is unavailable", inbound.PaneID, nil)
+		s.sendCommandResult(client, inbound.RequestID, action, false, "failed", "Agent is unavailable", inbound.PaneID, map[string]any{"error_code": "agent_unavailable"})
 		return
 	}
 	generation := s.state.Generation(inbound.PaneID)
 	browser := s.conversationB
 	if browser == nil || browser.Reader() != s.conversationM {
 		s.logger.Warn("conversation browser is unavailable", "pane_id", inbound.PaneID)
-		s.sendCommandResult(client, inbound.RequestID, action, false, "failed", "Conversation history could not be read", inbound.PaneID, nil)
+		s.sendCommandResult(client, inbound.RequestID, action, false, "failed", "Conversation history could not be read", inbound.PaneID, map[string]any{"error_code": "history_unreadable"})
 		return
 	}
 	page, historyErr := browser.ReadPage(client.Context(), conversation.BrowseRequest{
@@ -2154,7 +2152,7 @@ func (s *Server) handleConversationHistory(client *transport.ClientConn, inbound
 	})
 	if historyErr != nil {
 		s.logger.Warn("conversation history read failed", "pane_id", inbound.PaneID, "error", historyErr)
-		s.sendCommandResult(client, inbound.RequestID, action, false, "failed", "Conversation history could not be read", inbound.PaneID, nil)
+		s.sendCommandResult(client, inbound.RequestID, action, false, "failed", "Conversation history could not be read", inbound.PaneID, map[string]any{"error_code": "history_unreadable"})
 		return
 	}
 	if s.conversationHistoryReadObserver != nil {
@@ -2163,7 +2161,7 @@ func (s *Server) handleConversationHistory(client *transport.ClientConn, inbound
 	current, currentExists := s.state.Agent(inbound.PaneID)
 	if !currentExists || s.state.Generation(inbound.PaneID) != generation ||
 		!sameConversationTuple(agent, current) {
-		s.sendCommandResult(client, inbound.RequestID, action, false, "failed", "Agent changed while conversation history was loading", inbound.PaneID, nil)
+		s.sendCommandResult(client, inbound.RequestID, action, false, "failed", "Agent changed while conversation history was loading", inbound.PaneID, map[string]any{"error_code": "agent_changed"})
 		return
 	}
 	s.sendCommandResult(client, inbound.RequestID, action, true, "completed", "", inbound.PaneID, page)

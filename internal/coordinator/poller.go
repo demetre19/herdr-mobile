@@ -199,8 +199,11 @@ func (p *Poller) agentsFromTopology(panes []herdr.Pane, tabs []herdr.Tab) []*Age
 
 	agents := make([]*AgentState, 0, len(panes))
 	for _, pane := range panes {
+		// Panes without a detected agent still carry terminal+tab identity, so
+		// surface them as a controllable "terminal" pseudo-agent instead of
+		// hiding them.
 		if pane.Agent == "" {
-			continue
+			pane.Agent = "terminal"
 		}
 		if tab, ok := tabByID[pane.TabID]; ok {
 			pane.TabLabel = tab.Label

@@ -8,7 +8,12 @@ SCRIPT_DIR=${0%/*}
 REPO_DIR=$(CDPATH='' cd "$SCRIPT_DIR/.." && pwd)
 OUT_DIR="${1:-$REPO_DIR/bin}"
 
-VERSION=$(git -C "$REPO_DIR" describe --tags --always --dirty 2>/dev/null || echo "dev")
+# The product version comes from the plugin manifest, not git describe: an
+# untagged or dirty checkout produces strings like "0.21.3-ux2-d449e8d" that
+# the update checker's semver parser rejects, which would silently disable
+# self-update on locally built relays.
+VERSION=$(sed -n 's/^version = "\([0-9.]*\)"$/\1/p' "$REPO_DIR/herdr-plugin.toml")
+[ -n "$VERSION" ] || VERSION="dev"
 REVISION=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
 
 mkdir -p "$OUT_DIR"

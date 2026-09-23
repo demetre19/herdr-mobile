@@ -19,6 +19,13 @@ const (
 	nextTestRevision    = "89abcdef0123456789abcdef0123456789abcdef"
 )
 
+func TestMain(m *testing.M) {
+	// Tests exercise the release-check path; production disables it unless
+	// HERDR_UPDATE_REPO names a repository, so tests opt in explicitly.
+	_ = os.Setenv("HERDR_UPDATE_REPO", "demetre19/herdr-mobile")
+	os.Exit(m.Run())
+}
+
 func TestNewerVersion(t *testing.T) {
 	if !NewerVersion("1.2.4", "1.2.3") ||
 		NewerVersion("1.2.3", "1.2.3") ||
@@ -610,6 +617,7 @@ func (b blockingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func TestManagerStateDoesNotBlockOnReleaseCheckNetwork(t *testing.T) {
+	t.Setenv("HERDR_UPDATE_REPO", "demetre19/herdr-mobile")
 	manager := NewManager(
 		t.TempDir(),
 		t.TempDir(),

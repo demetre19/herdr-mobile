@@ -39,6 +39,7 @@ type Job struct {
 	HealthURL         string `json:"health_url"`
 	DeployAppFirst    bool   `json:"deploy_app_first,omitempty"`
 	ExpectedAppOrigin string `json:"expected_app_origin,omitempty"`
+	AssetBase         string `json:"asset_base,omitempty"`
 }
 
 type State struct {

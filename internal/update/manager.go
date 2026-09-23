@@ -22,8 +22,22 @@ import (
 	relayrelease "github.com/0cv/herdr-mobile-relay/internal/release"
 )
 
-const canonicalAPI = "https://api.github.com/repos/0cv/herdr-mobile-relay"
-const canonicalWeb = "https://github.com/0cv/herdr-mobile-relay"
+const canonicalAPI = "https://api.github.com/repos/demetre19/herdr-mobile"
+const canonicalWeb = "https://github.com/demetre19/herdr-mobile"
+
+// updateRepoSlug names the GitHub repository release checks and installs read
+// from. HERDR_UPDATE_REPO overrides the canonical feed for development and
+// staging ("owner/repo"); unset, releases come from the canonical repository.
+func updateRepoSlug() string {
+	return strings.TrimSpace(os.Getenv("HERDR_UPDATE_REPO"))
+}
+
+func updateRepoBases() (apiBase, webBase string) {
+	if slug := updateRepoSlug(); slug != "" {
+		return "https://api.github.com/repos/" + slug, "https://github.com/" + slug
+	}
+	return canonicalAPI, canonicalWeb
+}
 
 var appDeployEnvironmentKeys = [...]string{
 	"HERDR_APP_DEPLOY_ORIGIN",
@@ -86,6 +100,7 @@ type gitObject struct {
 }
 
 func NewManager(releaseRoot, runtimeDir, herdrBin, version, revision, healthURL string) *Manager {
+	apiBase, webBase := updateRepoBases()
 	manager := &Manager{
 		releaseRoot: releaseRoot,
 		runtimeDir:  runtimeDir,
@@ -93,8 +108,8 @@ func NewManager(releaseRoot, runtimeDir, herdrBin, version, revision, healthURL 
 		version:     version,
 		revision:    revision,
 		healthURL:   healthURL,
-		apiBase:     canonicalAPI,
-		webBase:     canonicalWeb,
+		apiBase:     apiBase,
+		webBase:     webBase,
 		client: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -135,10 +150,10 @@ func (m *Manager) Check(ctx context.Context) State {
 	m.state.FinishedAt = ""
 	m.state.TargetVersion = ""
 	m.state.TargetRevision = ""
-	m.state.State = "checking"
 	m.state.Error = ""
 	m.state.CurrentVersion = m.version
 	m.state.CurrentRevision = m.revision
+	m.state.State = "checking"
 	_ = writeState(m.statePath(), m.state)
 	m.mu.Unlock()
 
@@ -234,6 +249,7 @@ func (m *Manager) Schedule(
 		HealthURL:         m.healthURL,
 		DeployAppFirst:    deployAppFirst,
 		ExpectedAppOrigin: expectedAppOrigin,
+		AssetBase:         m.webBase + "/releases/download",
 	}
 	if err := writeJSONAtomic(jobPath, job); err != nil {
 		return "", m.publicState(m.state), fmt.Errorf("persist update job: %w", err)
