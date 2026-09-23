@@ -35,3 +35,18 @@ relay/phone-app-origin.*
 .ralph
 ralph.yml
 WATCHDOG.yml
+
+# Secrets and local environment files
+*.env
+*.env.*
+.env.*
+relay.env
+*.local
+*.local.*
+*.pem
+*.key
+
+# Local-only state and deploy helpers
+relay/phone-app-origin-configured
+relay/relay.pid
+scripts-local/
