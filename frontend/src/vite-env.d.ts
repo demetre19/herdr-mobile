@@ -26,6 +26,25 @@ declare global {
     setAppBadge?: (contents?: number) => Promise<void>;
     standalone?: boolean;
   }
+  interface BarcodeDetectorOptions {
+    formats?: string[];
+  }
+
+  interface DetectedBarcode {
+    rawValue: string;
+    format: string;
+  }
+
+  interface BarcodeDetector {
+    detect(source: CanvasImageSource): Promise<DetectedBarcode[]>;
+  }
+
+  interface BarcodeDetectorConstructor {
+    new (options?: BarcodeDetectorOptions): BarcodeDetector;
+    getSupportedFormats(): Promise<string[]>;
+  }
+
+  var BarcodeDetector: BarcodeDetectorConstructor | undefined;
 }
 
 export {};

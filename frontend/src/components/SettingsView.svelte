@@ -3,6 +3,7 @@
   import DeviceSettings from '$components/DeviceSettings.svelte';
   import NotificationSettings from '$components/NotificationSettings.svelte';
   import AppDialog from '$components/ui/AppDialog.svelte';
+  import QrPairDialog from '$components/QrPairDialog.svelte';
   import AppSelect from '$components/ui/AppSelect.svelte';
   import ColorPicker from '$components/ui/ColorPicker.svelte';
   import AppSwitch from '$components/ui/AppSwitch.svelte';
@@ -195,6 +196,7 @@
   let pendingUpdateAction = $state<SafeUpdateAction | null>(null);
   let manualRelayId = $state('');
   let manualOpen = $state(false);
+  let qrPairOpen = $state(false);
   let removalRelayId = $state('');
   let removalOpen = $state(false);
   let busyRelayId = $state('');
@@ -602,6 +604,7 @@
       <label for="relay-token">Relay key</label>
       <input id="relay-token" bind:value={relayToken} type="password" placeholder="HERDR_RELAY_TOKEN" />
       <div class="form-actions">
+        <Button variant="secondary" onclick={() => { qrPairOpen = true; }}>Pair with QR Code</Button>
         <Button type="submit">Add Relay</Button>
         <Button variant="secondary" onclick={() => relayStore.connectAll()}>Reconnect All</Button>
       </div>
@@ -1069,3 +1072,5 @@
     <Button variant="ghost" onclick={() => { removalOpen = false; }}>Cancel</Button>
   </div>
 </AppDialog>
+
+<QrPairDialog bind:open={qrPairOpen} />
