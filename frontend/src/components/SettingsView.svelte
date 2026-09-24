@@ -200,8 +200,6 @@
   let removalRelayId = $state('');
   let removalOpen = $state(false);
   let busyRelayId = $state('');
-  let renamingRelayId = $state('');
-  let renamingLabel = $state('');
   let speechVoiceBusy = $state<string[]>([]);
   const speechVoiceRequested = new Set<string>();
   function isReadOnlyRelay(relayId: string): boolean {
@@ -212,15 +210,6 @@
     relay,
     connection: $connections.get(relay.id),
   })));
-  function startRelayRename(relayId: string, label: string) {
-    renamingRelayId = relayId;
-    renamingLabel = label;
-  }
-  function commitRelayRename() {
-    if (renamingRelayId) relayStore.renameRelay(renamingRelayId, renamingLabel);
-    renamingRelayId = '';
-    renamingLabel = '';
-  }
   const connectedCount = $derived([...$connections.values()].filter((connection) => connection.status === 'connected').length);
   const degradedCount = $derived([...$connections.values()].filter(
     (connection) => connection.status === 'connected' && connection.inventory.state !== 'ready',
@@ -628,27 +617,27 @@
             aria-label={`${relay.label} relay ${connectionStatus}`}
           ></span>
           <div class="relay-info">
-            {#if renamingRelayId === relay.id}
-              <input
-                class="relay-rename-input"
-                bind:value={renamingLabel}
-                maxlength="128"
-                aria-label={`Rename ${relay.label}`}
-                onkeydown={(event) => {
-                  if (event.key === 'Enter') { event.preventDefault(); commitRelayRename(); }
-                  if (event.key === 'Escape') { renamingRelayId = ''; renamingLabel = ''; }
-                }}
-                onblur={commitRelayRename}
-              />
-            {:else}
-              <button
-                class="relay-name-button"
-                type="button"
-                title="Rename this machine"
-                aria-label={`Rename ${relay.label}`}
-                onclick={() => startRelayRename(relay.id, relay.label)}
-              ><strong>{relay.label}</strong></button>
-            {/if}
+            <input
+              class="relay-name-input"
+              value={relay.label}
+              maxlength="128"
+              aria-label={`Rename ${relay.label}`}
+              onchange={(event) => {
+                const next = event.currentTarget.value.trim().slice(0, 128);
+                if (!next || next === relay.label) {
+                  event.currentTarget.value = relay.label;
+                  return;
+                }
+                relayStore.renameRelay(relay.id, next);
+              }}
+              onkeydown={(event) => {
+                if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); }
+                if (event.key === 'Escape') {
+                  event.currentTarget.value = relay.label;
+                  event.currentTarget.blur();
+                }
+              }}
+            />
             {#if connectionPath}<small>Connection: {connectionPath}</small>{/if}
             {#if gateways.length}
               <small>Gateway: {connection?.gatewayVersion || 'unknown'} · Latest: {connection?.update.available_version || connection?.gatewayAvailableVersion || connection?.releaseVersion || 'unknown'}</small>
