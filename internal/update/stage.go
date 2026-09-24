@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	canonicalReleaseAssets = "https://github.com/0cv/herdr-mobile-relay/releases/download"
+	canonicalReleaseAssets = "https://github.com/demetre19/herdr-mobile/releases/download"
 	maxChecksumBytes       = 1 * 1024 * 1024
 	maxArchiveBytes        = 128 * 1024 * 1024
 	maxExtractedBytes      = 256 * 1024 * 1024

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -25,7 +26,6 @@ const (
 	updateWorkerTimeout = 15 * time.Minute
 	processTermGrace    = 2 * time.Second
 	processWaitDelay    = 4 * time.Second
-	updateRepository    = "0cv/herdr-mobile-relay"
 )
 
 var ErrConcurrent = errors.New("another update is already running")
@@ -70,7 +70,8 @@ type stagedRelease struct {
 type Worker struct {
 	Prepare func(context.Context, Job) (stagedRelease, error)
 	Deploy  func(context.Context, Job, stagedRelease) error
-	Install func(context.Context, Job) error
+	Install func(context.Context, Job, stagedRelease) (string, error)
+	Restart func(context.Context) error
 	Verify  func(context.Context, string, relayrelease.Manifest) error
 }
 
@@ -93,7 +94,7 @@ func (w Worker) Run(ctx context.Context, jobPath string) error {
 		TargetRevision: job.TargetRevision,
 		Target:         relayrelease.CurrentTarget(),
 		StartedAt:      started,
-		Mode:           "plugin",
+		Mode:           "release",
 		Eligible:       true,
 	}
 	failStartup := func(startupErr error) error {
@@ -146,16 +147,16 @@ func (w Worker) Run(ctx context.Context, jobPath string) error {
 			return fail(job.StatePath, state, fmt.Errorf("deploy target app before relay: %w", err))
 		}
 	}
-
 	state.State = "installing"
 	if err := writeState(job.StatePath, state); err != nil {
 		return fmt.Errorf("write installing state: %w", err)
 	}
 	install := w.Install
 	if install == nil {
-		install = installPlugin
+		install = installStagedRelease
 	}
-	if err := install(ctx, job); err != nil {
+	previousDir, err := install(ctx, job, staged)
+	if err != nil {
 		return fail(job.StatePath, state, err)
 	}
 
@@ -163,13 +164,26 @@ func (w Worker) Run(ctx context.Context, jobPath string) error {
 	if err := writeState(job.StatePath, state); err != nil {
 		return err
 	}
+	restart := w.Restart
+	if restart == nil {
+		restart = restartRelayService
+	}
+	if err := restart(ctx); err != nil {
+		return fail(job.StatePath, state, fmt.Errorf("restart relay service: %w", err))
+	}
 	verify := w.Verify
 	if verify == nil {
 		verify = verifyHealth
 	}
 	expected := staged.Manifest
 	if err := verify(ctx, job.HealthURL, expected); err != nil {
-		return fail(job.StatePath, state, fmt.Errorf("verify Herdr plugin update: %w", err))
+		verifyErr := fmt.Errorf("verify Herdr relay update: %w", err)
+		if rollbackErr := rollbackActivation(ctx, job, previousDir, restart); rollbackErr != nil {
+			return fail(job.StatePath, state, fmt.Errorf(
+				"%w; automatic rollback failed: %v", verifyErr, rollbackErr))
+		}
+		state.State = "rolled_back"
+		return fail(job.StatePath, state, verifyErr)
 	}
 
 	state.State = "succeeded"
@@ -185,24 +199,113 @@ func (w Worker) Run(ctx context.Context, jobPath string) error {
 	return nil
 }
 
-func installPlugin(ctx context.Context, job Job) error {
-	command := exec.Command(
-		job.HerdrBin,
-		"plugin",
-		"install",
-		updateRepository,
-		"--ref",
-		strings.ToLower(job.TargetRevision),
-		"--yes",
+// installStagedRelease moves the verified staged release into the release root,
+// seals it, prunes superseded releases, and repoints `current`. It returns the
+// previously active release directory so a failed health check can roll back.
+// The staged tree is extracted under the runtime directory, which shares the
+// filesystem with the release root in every supported deployment.
+func installStagedRelease(
+	ctx context.Context,
+	job Job,
+	staged stagedRelease,
+) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	stagedDir := filepath.Join(staged.Root, "release")
+	if _, err := relayrelease.Verify(stagedDir, relayrelease.CurrentTarget()); err != nil {
+		return "", fmt.Errorf("staged release failed verification: %w", err)
+	}
+	target := strings.ReplaceAll(relayrelease.CurrentTarget(), "/", "-")
+	finalDir := filepath.Join(
+		job.ReleaseRoot,
+		"releases",
+		fmt.Sprintf("%s-%s-%s",
+			staged.Manifest.Version,
+			strings.ToLower(staged.Manifest.Revision),
+			target),
 	)
-	command.Env = environmentWith("HERDR_MOBILE_RELAY_NO_AUTO_SETUP", "1")
+	previousDir := currentReleaseDir(job.ReleaseRoot)
+	if _, err := os.Stat(finalDir); err == nil {
+		if _, err := relayrelease.Verify(finalDir, relayrelease.CurrentTarget()); err != nil {
+			return "", fmt.Errorf("existing target release failed verification: %w", err)
+		}
+	} else if errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(filepath.Dir(finalDir), 0o755); err != nil {
+			return "", err
+		}
+		if err := os.Rename(stagedDir, finalDir); err != nil {
+			return "", fmt.Errorf("install staged release: %w", err)
+		}
+	} else {
+		return "", err
+	}
+	if err := relayrelease.Seal(finalDir); err != nil {
+		return "", fmt.Errorf("seal release: %w", err)
+	}
+	if err := PruneOldReleases(job.ReleaseRoot, finalDir, previousDir); err != nil {
+		return "", fmt.Errorf("prune old releases: %w", err)
+	}
+	if err := Activate(job.ReleaseRoot, finalDir); err != nil {
+		return "", fmt.Errorf("activate release: %w", err)
+	}
+	return previousDir, nil
+}
+
+// currentReleaseDir resolves the release directory `current` points at, or ""
+// when no release is active yet.
+func currentReleaseDir(releaseRoot string) string {
+	resolved, err := filepath.EvalSymlinks(filepath.Join(releaseRoot, "current"))
+	if err != nil {
+		return ""
+	}
+	return resolved
+}
+
+// restartRelayService restarts the running relay so it picks up the newly
+// activated release. The worker runs as a detached launchd/systemd job, so it
+// survives the parent relay's restart.
+func restartRelayService(ctx context.Context) error {
+	var command *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		command = exec.Command(
+			"launchctl", "kickstart", "-k",
+			fmt.Sprintf("gui/%d/com.herdr-mobile-relay.service", os.Getuid()),
+		)
+	case "linux":
+		command = exec.Command(
+			"systemctl", "--user", "restart", "herdr-mobile-relay.service",
+		)
+	default:
+		return fmt.Errorf("service restart is not supported on %s", runtime.GOOS)
+	}
 	output, err := runCommandContext(ctx, command)
 	if err != nil {
-		return fmt.Errorf(
-			"Herdr plugin install failed: %s: %s",
-			err,
-			compact(string(output), 500),
-		)
+		return fmt.Errorf("%s: %s", err, compact(string(output), 300))
+	}
+	return nil
+}
+
+// rollbackActivation repoints `current` at the previous release and restarts
+// the service so a failed update leaves the relay running its prior build.
+func rollbackActivation(
+	ctx context.Context,
+	job Job,
+	previousDir string,
+	restart func(context.Context) error,
+) error {
+	if previousDir == "" {
+		return errors.New("no previous release to restore")
+	}
+	if _, err := relayrelease.Verify(previousDir, relayrelease.CurrentTarget()); err != nil {
+		return fmt.Errorf("previous release failed verification: %w", err)
+	}
+	if err := Activate(job.ReleaseRoot, previousDir); err != nil {
+		return fmt.Errorf("reactivate previous release: %w", err)
+	}
+	if err := restart(ctx); err != nil {
+		return fmt.Errorf("restart previous release: %w", err)
 	}
 	return nil
 }
@@ -277,30 +380,11 @@ func processGroupAlive(pgid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-func environmentWith(key, value string) []string {
-	prefix := key + "="
-	environment := os.Environ()
-	result := make([]string, 0, len(environment)+1)
-	for _, item := range environment {
-		if strings.HasPrefix(item, prefix) {
-			continue
-		}
-		result = append(result, item)
-	}
-	return append(result, prefix+value)
-}
-
 func validateJob(job Job) error {
 	if job.ReleaseRoot == "" || !filepath.IsAbs(job.ReleaseRoot) {
 		return errors.New("release_root must be absolute")
 	}
-	if job.HerdrBin == "" || !filepath.IsAbs(job.HerdrBin) {
-		return errors.New("herdr_bin must be absolute")
-	}
-	info, err := os.Stat(job.HerdrBin)
-	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
-		return errors.New("herdr_bin must be an executable file")
-	}
+
 	if !semverPattern.MatchString(job.TargetVersion) {
 		return errors.New("target_version must be semantic versioned")
 	}
@@ -419,7 +503,7 @@ func verifyHealth(ctx context.Context, healthURL string, manifest relayrelease.M
 	client := &http.Client{Timeout: 2 * time.Second}
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	deadline := time.NewTimer(15 * time.Second)
+	deadline := time.NewTimer(30 * time.Second)
 	defer deadline.Stop()
 	for {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)

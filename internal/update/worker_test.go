@@ -20,40 +20,60 @@ import (
 	relayrelease "github.com/0cv/herdr-mobile-relay/internal/release"
 )
 
-func TestInstallPluginPinsExactCommitAndSuppressesSetup(t *testing.T) {
+func TestInstallStagedReleaseActivatesSealedRelease(t *testing.T) {
 	root := t.TempDir()
-	argsPath := filepath.Join(root, "args")
-	envPath := filepath.Join(root, "env")
-	herdrBin := filepath.Join(root, "herdr")
-	script := `#!/bin/sh
-printf '%s\n' "$@" > "$HERDR_TEST_ARGS"
-printf '%s\n' "$HERDR_MOBILE_RELAY_NO_AUTO_SETUP" > "$HERDR_TEST_ENV"
-`
-	if err := os.WriteFile(herdrBin, []byte(script), 0o700); err != nil {
+	releaseRoot := filepath.Join(root, "installed")
+	runtimeDir := filepath.Join(root, "runtime")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HERDR_TEST_ARGS", argsPath)
-	t.Setenv("HERDR_TEST_ENV", envPath)
-	t.Setenv("HERDR_MOBILE_RELAY_NO_AUTO_SETUP", "0")
 
-	job := Job{HerdrBin: herdrBin, TargetRevision: strings.ToUpper(nextTestRevision)}
-	if err := installPlugin(t.Context(), job); err != nil {
+	previousDir := filepath.Join(releaseRoot, "releases", "1.2.3-"+currentTestRevision+"-test")
+	writeWorkerTestRelease(t, previousDir, "1.2.3", currentTestRevision)
+	if err := Activate(releaseRoot, previousDir); err != nil {
 		t.Fatal(err)
 	}
-	args, err := os.ReadFile(argsPath)
+	// Sealing removes write bits; restore them so TempDir cleanup can remove
+	// the tree, and resolve the path the way currentReleaseDir reports it.
+	t.Cleanup(func() { _ = makeReleaseDirectoriesWritable(releaseRoot) })
+	previousDir, err := filepath.EvalSymlinks(previousDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantArgs := "plugin\ninstall\n0cv/herdr-mobile-relay\n--ref\n" + nextTestRevision + "\n--yes\n"
-	if string(args) != wantArgs {
-		t.Fatalf("Herdr arguments = %q, want %q", args, wantArgs)
+
+	stagedRoot := filepath.Join(runtimeDir, ".update-stage-test")
+	writeWorkerTestRelease(t, filepath.Join(stagedRoot, "release"), "1.2.4", nextTestRevision)
+	staged := stagedRelease{
+		Root: stagedRoot,
+		Manifest: relayrelease.Manifest{
+			Version:  "1.2.4",
+			Revision: nextTestRevision,
+		},
 	}
-	value, err := os.ReadFile(envPath)
+
+	job := Job{ReleaseRoot: releaseRoot}
+	previous, err := installStagedRelease(t.Context(), job, staged)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(value) != "1\n" {
-		t.Fatalf("HERDR_MOBILE_RELAY_NO_AUTO_SETUP = %q", value)
+	if previous != previousDir {
+		t.Fatalf("previous release = %q, want %q", previous, previousDir)
+	}
+	if got := currentReleaseDir(releaseRoot); !strings.Contains(got, "1.2.4") {
+		t.Fatalf("current release = %q, want 1.2.4", got)
+	}
+	if _, err := relayrelease.Verify(
+		filepath.Join(releaseRoot, "current"),
+		relayrelease.CurrentTarget(),
+	); err != nil {
+		t.Fatalf("activated release failed verification: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(releaseRoot, "current", "web", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o222 != 0 {
+		t.Fatalf("sealed release stayed writable: %v", info.Mode().Perm())
 	}
 }
 
@@ -103,19 +123,17 @@ func TestRunCommandContextTerminatesDescendantHoldingOutputPipe(t *testing.T) {
 		_ = syscall.Kill(childPID, syscall.SIGKILL)
 	})
 	deadline := time.Now().Add(time.Second)
-	for {
+	for time.Now().Before(deadline) {
 		err := syscall.Kill(childPID, 0)
 		if err != nil && !errors.Is(err, syscall.EPERM) {
 			return
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("descendant process %d survived process-group cancellation", childPID)
-		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	t.Fatal("descendant process survived group termination")
 }
 
-func TestWorkerRunsPluginInstallAndPersistsSuccess(t *testing.T) {
+func TestWorkerInstallsStagedReleaseAndPersistsSuccess(t *testing.T) {
 	jobPath, job := writeWorkerTestJob(t)
 	var calls []string
 	worker := Worker{
@@ -127,8 +145,12 @@ func TestWorkerRunsPluginInstallAndPersistsSuccess(t *testing.T) {
 			t.Fatal("app deployment ran for a relay-only update")
 			return nil
 		},
-		Install: func(_ context.Context, got Job) error {
+		Install: func(_ context.Context, got Job, _ stagedRelease) (string, error) {
 			calls = append(calls, "install:"+got.TargetRevision)
+			return "", nil
+		},
+		Restart: func(context.Context) error {
+			calls = append(calls, "restart")
 			return nil
 		},
 		Verify: func(_ context.Context, healthURL string, manifest relayrelease.Manifest) error {
@@ -147,6 +169,7 @@ func TestWorkerRunsPluginInstallAndPersistsSuccess(t *testing.T) {
 	if !reflect.DeepEqual(calls, []string{
 		"prepare:1.2.4",
 		"install:" + nextTestRevision,
+		"restart",
 		"verify:1.2.4",
 	}) {
 		t.Fatalf("worker calls = %v", calls)
@@ -172,8 +195,8 @@ func TestWorkerInstallFailureIsRetryable(t *testing.T) {
 		Prepare: func(_ context.Context, got Job) (stagedRelease, error) {
 			return workerTestStagedRelease(t, got), nil
 		},
-		Install: func(context.Context, Job) error {
-			return errors.New("injected plugin install failure")
+		Install: func(context.Context, Job, stagedRelease) (string, error) {
+			return "", errors.New("injected plugin install failure")
 		},
 	}
 	err := worker.Run(t.Context(), jobPath)
@@ -226,9 +249,14 @@ func TestWorkerDeploysVerifiedAppBeforeInstallingRelay(t *testing.T) {
 			calls = append(calls, "deploy")
 			return nil
 		},
-		Install: func(context.Context, Job) error {
+		Install: func(context.Context, Job, stagedRelease) (string, error) {
 			assertState("installing")
 			calls = append(calls, "install")
+			return "", nil
+		},
+		Restart: func(context.Context) error {
+			assertState("restarting")
+			calls = append(calls, "restart")
 			return nil
 		},
 		Verify: func(context.Context, string, relayrelease.Manifest) error {
@@ -240,7 +268,7 @@ func TestWorkerDeploysVerifiedAppBeforeInstallingRelay(t *testing.T) {
 	if err := worker.Run(t.Context(), jobPath); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(calls, []string{"prepare", "deploy", "install", "verify"}) {
+	if !reflect.DeepEqual(calls, []string{"prepare", "deploy", "install", "restart", "verify"}) {
 		t.Fatalf("worker calls = %v", calls)
 	}
 }
@@ -260,9 +288,9 @@ func TestWorkerLeavesRelayUntouchedWhenAppDeploymentFails(t *testing.T) {
 		Deploy: func(context.Context, Job, stagedRelease) error {
 			return errors.New("injected Pages verification failure")
 		},
-		Install: func(context.Context, Job) error {
+		Install: func(context.Context, Job, stagedRelease) (string, error) {
 			installed = true
-			return nil
+			return "", nil
 		},
 	}
 	err := worker.Run(t.Context(), jobPath)

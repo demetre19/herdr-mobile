@@ -195,26 +195,18 @@ func TestManagerReconcilesStaleAvailableStateFromPreviousRuntime(t *testing.T) {
 	}
 }
 
-func TestManagerEligibilityRequiresReleasedBuildAndHerdr(t *testing.T) {
-	herdrBin := testHerdrBinary(t)
+func TestManagerEligibilityRequiresReleasedBuild(t *testing.T) {
 	manager := &Manager{
-		herdrBin: herdrBin,
 		version:  "1.2.3",
 		revision: currentTestRevision,
 	}
-	if eligible, mode, reason := manager.eligibility(); !eligible || mode != "plugin" || reason != "" {
+	if eligible, mode, reason := manager.eligibility(); !eligible || mode != "release" || reason != "" {
 		t.Fatalf("eligible build rejected: eligible=%v mode=%q reason=%q", eligible, mode, reason)
 	}
 
 	manager.version = "v1.2.3-dev"
 	if eligible, _, reason := manager.eligibility(); eligible || !strings.Contains(reason, "released") {
 		t.Fatalf("development build accepted: eligible=%v reason=%q", eligible, reason)
-	}
-
-	manager.version = "1.2.3"
-	manager.herdrBin = filepath.Join(t.TempDir(), "missing-herdr")
-	if eligible, _, reason := manager.eligibility(); eligible || !strings.Contains(reason, "unavailable") {
-		t.Fatalf("missing Herdr accepted: eligible=%v reason=%q", eligible, reason)
 	}
 }
 

@@ -494,14 +494,7 @@ func (m *Manager) eligibility() (bool, string, string) {
 	if !semverPattern.MatchString(m.version) || !validRevision(m.revision) {
 		return false, "unsupported", "Managed updates require a released relay build"
 	}
-	if !filepath.IsAbs(m.herdrBin) {
-		return false, "unsupported", "Managed updates require an absolute Herdr executable path"
-	}
-	info, err := os.Stat(m.herdrBin)
-	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
-		return false, "unsupported", "The Herdr executable is unavailable"
-	}
-	return true, "plugin", ""
+	return true, "release", ""
 }
 
 type workerLaunch struct {
@@ -582,7 +575,7 @@ func (m *Manager) loadState() State {
 		strings.EqualFold(state.TargetRevision, m.revision) {
 		state.CanInstall = false
 		state.Eligible = true
-		state.Mode = "plugin"
+		state.Mode = "release"
 		state.Error = ""
 		if state.FinishedAt == "" {
 			state.FinishedAt = time.Now().UTC().Format(time.RFC3339)
@@ -636,7 +629,7 @@ func (m *Manager) recoverOrphan(includeScheduled bool) {
 		state.State = "succeeded"
 		state.CurrentVersion = m.version
 		state.CurrentRevision = m.revision
-		state.Mode = "plugin"
+		state.Mode = "release"
 		state.Eligible = true
 		state.CanInstall = false
 		state.Error = ""
