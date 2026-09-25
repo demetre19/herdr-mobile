@@ -3907,7 +3907,24 @@ func (s *Server) recentActivities(limit int) []activity.Entry {
 	start := len(s.activityView) - limit
 	entries := append([]activity.Entry(nil), s.activityView[start:]...)
 	s.activityMu.RUnlock()
-	return s.enrichActivityResponses(entries)
+	enriched := s.enrichActivityResponses(entries)
+	// Backfilled extracts are written back so the bounded read budget converges
+	// instead of re-reading the same transcripts on every connect.
+	s.activityMu.Lock()
+	byID := make(map[string]int, len(s.activityView))
+	for index := range s.activityView {
+		byID[s.activityView[index].ID] = index
+	}
+	for _, entry := range enriched {
+		if entry.Extract == "" {
+			continue
+		}
+		if index, ok := byID[entry.ID]; ok && s.activityView[index].Extract == "" {
+			s.activityView[index].Extract = entry.Extract
+		}
+	}
+	s.activityMu.Unlock()
+	return enriched
 }
 
 func (s *Server) enrichActivityResponses(entries []activity.Entry) []activity.Entry {
@@ -3919,10 +3936,22 @@ func (s *Server) enrichActivityResponses(entries []activity.Entry) []activity.En
 		agents[agent.PaneID] = agent
 	}
 	pages := make(map[string]conversation.Page)
+	// Entries that already carry an extract were enriched when the activity was
+	// recorded; re-reading their transcripts on every connect is what stalled
+	// registration. The backfill for older or missed entries is bounded so a
+	// connect snapshot can never block the registration lock on disk I/O.
+	const maxBackfillReads = 10
+	reads := 0
 	for index := range entries {
 		entry := entries[index]
 		if strings.ToLower(strings.TrimSpace(entry.Kind)) != "finished" {
 			continue
+		}
+		if strings.TrimSpace(entry.Extract) != "" {
+			continue
+		}
+		if reads >= maxBackfillReads {
+			break
 		}
 		agentName := strings.TrimSpace(entry.Agent)
 		sessionID := strings.TrimSpace(entry.Session)
@@ -3942,6 +3971,7 @@ func (s *Server) enrichActivityResponses(entries []activity.Entry) []activity.En
 		cacheKey := agentName + "\x00" + project.CWD + "\x00" + project.ForegroundCWD + "\x00" + sessionID
 		page, loaded := pages[cacheKey]
 		if !loaded {
+			reads++
 			page, _ = s.conversationM.ReadWithProject(agentName, project, sessionID, "", 200)
 			pages[cacheKey] = page
 		}
