@@ -66,8 +66,10 @@ const (
 )
 
 // errGatewayWriteQueueFull reports that the shared link writer is saturated.
-// The offending logical connection is dropped instead of stalling every other
-// connection multiplexed onto the same link.
+// Saturation is a link-level fault: a queue that cannot drain never accepts the
+// next session's connect burst either, so dropping only the offending logical
+// connection leaves every later phone wedged behind the same dead link. The
+// send path therefore escalates it to a session failure and reconnects.
 var errGatewayWriteQueueFull = errors.New("gateway write queue is full")
 
 // GatewayStatus is a serializable snapshot of the gateway registration. The
@@ -1047,6 +1049,10 @@ func (s *gatewaySession) handleOpen(connID uint32, payload []byte) {
 				// being mistaken for a complete frame.
 				s.client.removeConn(connID, conn)
 				conn.pipe.Shutdown()
+				// A link that cannot drain is dead for every connection on it,
+				// not just this one: tear the session down so the reconnect
+				// rebuilds a working writer instead of wedging every phone.
+				s.fail(err)
 			}
 			return err
 		}

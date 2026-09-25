@@ -8,7 +8,9 @@ const seen = new Set<string>();
 let banner: HTMLElement | null = null;
 
 function show(message: string): void {
-  const text = message.trim().slice(0, 300);
+  // One line of evidence is enough to report; the full stack still lands in
+  // the banner's title for copy/paste, but the banner itself stays a strip.
+  const text = message.trim().split('\n')[0].slice(0, 140);
   if (!text || seen.has(text) || seen.size >= 3) return;
   if (text.includes('ResizeObserver loop')) return;
   seen.add(text);
@@ -16,11 +18,11 @@ function show(message: string): void {
     if (!banner) {
       banner = document.createElement('div');
       banner.setAttribute('role', 'alert');
-      // Bottom-anchored so the header controls stay reachable while the
-      // report is visible; the report itself dismisses on tap.
+      // Bottom-anchored single strip: readable, dismissible, and small enough
+      // that it never covers the workspace list it is reporting about.
       banner.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:2147483647;'
-        + 'background:#7f1d1d;color:#fff;font:12px/1.4 monospace;padding:.5rem .75rem;'
-        + 'white-space:pre-wrap;word-break:break-word;max-height:40vh;overflow-y:auto;';
+        + 'background:#7f1d1d;color:#fff;font:11px/1.3 monospace;padding:.35rem .6rem;'
+        + 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-height:2.2rem;';
       banner.addEventListener('click', () => {
         banner?.remove();
         banner = null;
@@ -28,7 +30,9 @@ function show(message: string): void {
       });
       document.body.append(banner);
     }
-    banner.textContent = `${banner.textContent ? `${banner.textContent}\n` : 'App error (tap to dismiss)\n'}${text}`;
+    const prefix = banner.textContent ? `${banner.textContent} · ` : 'App error (tap to dismiss): ';
+    banner.textContent = `${prefix}${text}`;
+    banner.title = `${message.trim().slice(0, 2000)}`;
   } catch {
     // Reporting must never take the app down further.
   }
