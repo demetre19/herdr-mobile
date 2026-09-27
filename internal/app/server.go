@@ -1014,7 +1014,7 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 			catalog = fitSlashCommandCatalog(slashcmd.Revise(catalog), requestID, "list_slash_commands", paneID)
 			s.sendCommandResult(client, requestID, "list_slash_commands", true, "completed", "", paneID, catalog)
-		case "workspace_tree", "workspace_file", "workspace_git_status", "workspace_git_diff":
+		case "workspace_tree", "workspace_file", "workspace_git_status", "workspace_git_diff", "workspace_file_write":
 			requestID := inbound.RequestID
 			paneID := inbound.PaneID
 			agent, exists := s.state.Agent(paneID)
@@ -1035,6 +1035,8 @@ func (s *Server) Run(ctx context.Context) error {
 				data, inspectErr = workspace.GitStatusFor(client.Context(), cwd)
 			case "workspace_git_diff":
 				data, inspectErr = workspace.GitDiffFor(client.Context(), cwd, inbound.Path)
+			case "workspace_file_write":
+				data, inspectErr = workspace.WriteFile(cwd, inbound.Path, inbound.Text)
 			}
 			currentAgent, currentExists := s.state.Agent(paneID)
 			if !currentExists || s.state.Generation(paneID) != generation || strings.TrimSpace(currentAgent.Cwd) != cwd {

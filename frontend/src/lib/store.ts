@@ -78,6 +78,8 @@ import type {
 import {
   clearPaneAgentViewOverridesForRelay,
   prunePaneAgentViewOverrides,
+  prunePinnedConversations,
+  prunePinnedWorkspaces,
   terminalHistoryLines,
   terminalRefreshInterval,
 } from './preferences';
@@ -1679,6 +1681,8 @@ class RelayStore {
     }
     this.agents.set(this.agentsValue);
     prunePaneAgentViewOverrides(this.agentsValue);
+    prunePinnedWorkspaces(this.agentsValue, this.workspacesValue);
+    prunePinnedConversations(this.agentsValue);
   }
   private mergePaneInteraction(paneId: string, message: Record<string, any>): void {
     const index = this.agentsValue.findIndex((agent) => agent.pane_id === paneId);
@@ -2831,6 +2835,23 @@ class RelayStore {
     const data = result.data as unknown as WorkspaceFile;
     if (!data || data.path !== path || !['text', 'image'].includes(data.kind)) {
       throw new CommandError('Relay returned an invalid workspace preview.');
+    }
+    return data;
+  }
+
+  workspaceEditAvailable(agent: Agent): boolean {
+    const connection = this.connectionsValue.get(agent.relay_id);
+    return Boolean(connection?.capabilities.includes('workspace_edit'));
+  }
+
+  async saveWorkspaceFile(agent: Agent, path: string, text: string): Promise<WorkspaceFile> {
+    if (!this.workspaceEditAvailable(agent)) {
+      throw new CommandError('This relay does not support editing workspace files');
+    }
+    const result = await this.sendToAgent(agent, { type: 'workspace_file_write', path, text }, 20_000);
+    const data = result.data as unknown as WorkspaceFile;
+    if (!data || data.path !== path) {
+      throw new CommandError('Relay returned an invalid workspace save result.');
     }
     return data;
   }

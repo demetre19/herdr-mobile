@@ -1,6 +1,6 @@
 <script lang="ts">
-
   import Button from '$components/ui/Button.svelte';
+  import { safeMarkdownHtml } from '$lib/markdown';
   import { relayStore } from '$lib/store';
   import type { Agent, WorkspaceFile, WorkspaceGitDiff, WorkspaceGitStatus, WorkspaceTree } from '$lib/types';
 
@@ -18,8 +18,19 @@
   let tree = $state<WorkspaceTree | null>(null);
   let git = $state<WorkspaceGitStatus | null>(null);
   let preview = $state<WorkspaceFile | WorkspaceGitDiff | null>(null);
+  let fileMode = $state<'render' | 'text' | 'edit'>('text');
+  let editText = $state('');
+  let saving = $state(false);
   let previewKind = $state<'file' | 'diff'>('file');
   let selectedPath = $state('');
+  const isMarkdownFile = $derived(Boolean(
+    preview && 'kind' in preview && preview.kind === 'text'
+      && /\.(md|mdx|markdown)$/i.test(preview.path || '')
+  ));
+  const canEditFile = $derived(Boolean(
+    agent && preview && 'kind' in preview && preview.kind === 'text'
+      && relayStore.workspaceEditAvailable(agent)
+  ));
   let loading = $state(false);
   let previewLoading = $state(false);
   let error = $state('');
@@ -33,6 +44,8 @@
   const MAX_DIFF_ZOOM = 2.5;
   const DIFF_ZOOM_STEP = 0.15;
   let diffZoom = $state(1);
+  let diffWrap = $state(true);
+  let previewZoom = $state(1);
   const diffPointers = new Map<number, { x: number; y: number }>();
   let diffPinch: { distance: number; zoom: number } | null = null;
 
@@ -228,7 +241,8 @@
     const current = ++previewGeneration;
     selectedPath = path;
     preview = null;
-    previewKind = 'file';
+    fileMode = /\.(md|mdx|markdown)$/i.test(path) ? 'render' : 'text';
+    editText = '';
     resetDiffZoom();
     error = '';
     previewLoading = true;
@@ -271,6 +285,27 @@
     selectedPath = '';
     resetDiffZoom();
     error = '';
+  }
+
+  function startEdit() {
+    if (!preview || !('kind' in preview) || preview.kind !== 'text') return;
+    editText = preview.text || '';
+    fileMode = 'edit';
+  }
+
+  async function saveEdit() {
+    if (!agent || !preview || !('kind' in preview) || preview.kind !== 'text' || saving) return;
+    saving = true;
+    try {
+      const saved = await relayStore.saveWorkspaceFile(agent, preview.path, editText);
+      preview = { ...preview, text: editText, size: saved.size };
+      fileMode = isMarkdownFile ? 'render' : 'text';
+      relayStore.showToast(`Saved ${preview.path}`);
+    } catch (saveError) {
+      relayStore.showToast((saveError as Error).message, true);
+    } finally {
+      saving = false;
+    }
   }
 
   function statusLabel(status: string): string {
@@ -374,8 +409,40 @@
               <figcaption>{preview.path} · {Math.ceil(preview.size / 1024)} KB</figcaption>
             </figure>
           {:else if preview && 'kind' in preview}
-            <header class="preview-heading"><strong>{preview.path}</strong><span>{Math.ceil(preview.size / 1024)} KB</span></header>
-            <textarea class="workspace-code-preview" readonly wrap="off" spellcheck="false" aria-label={`Contents of ${preview.path}`} value={preview.text || ''}></textarea>
+            <header class="preview-heading">
+              <strong>{preview.path}</strong>
+              <div class="preview-heading-meta">
+                <span>{Math.ceil(preview.size / 1024)} KB</span>
+                {#if isMarkdownFile || canEditFile}
+                  <div class="preview-mode-toggle" role="group" aria-label="File view mode">
+                    {#if isMarkdownFile}
+                      <button type="button" class:active={fileMode === 'render'} onclick={() => { fileMode = 'render'; }} title="Rendered preview">Render</button>
+                      <button type="button" class:active={fileMode === 'text'} onclick={() => { fileMode = 'text'; }} title="Raw text">Text</button>
+                    {/if}
+                    {#if canEditFile}
+                      {#if fileMode === 'edit'}
+                        <button type="button" onclick={() => { fileMode = isMarkdownFile ? 'render' : 'text'; }} title="Back to preview">Done</button>
+                        <button type="button" class="active save" disabled={saving} onclick={saveEdit} title="Save file">{saving ? 'Saving…' : 'Save'}</button>
+                      {:else}
+                        <button type="button" class:active={false} onclick={startEdit} title="Edit file">Edit</button>
+                      {/if}
+                    {/if}
+                  </div>
+                {/if}
+                <div class="preview-mode-toggle" role="group" aria-label="Text zoom">
+                  <button type="button" aria-label="Zoom out text" title="Smaller text" onclick={() => { previewZoom = Math.max(0.6, previewZoom - 0.15); }}>−</button>
+                  <button type="button" aria-label="Reset text size" title="Reset size" onclick={() => { previewZoom = 1; }}>{Math.round(previewZoom * 100)}%</button>
+                  <button type="button" aria-label="Zoom in text" title="Larger text" onclick={() => { previewZoom = Math.min(2.5, previewZoom + 0.15); }}>+</button>
+                </div>
+              </div>
+            </header>
+            {#if fileMode === 'edit'}
+              <textarea class="workspace-code-preview editing" style={`--preview-zoom: ${previewZoom}`} wrap="soft" spellcheck="false" aria-label={`Editing ${preview.path}`} bind:value={editText}></textarea>
+            {:else if isMarkdownFile && fileMode === 'render'}
+              <div class="workspace-markdown conversation-markdown" style={`--preview-zoom: ${previewZoom}`}>{@html safeMarkdownHtml(preview.text || '')}</div>
+            {:else}
+              <textarea class="workspace-code-preview" style={`--preview-zoom: ${previewZoom}`} readonly wrap="soft" spellcheck="false" aria-label={`Contents of ${preview.path}`} value={preview.text || ''}></textarea>
+            {/if}
           {:else if preview && 'diff' in preview}
             <header class="preview-heading">
               <strong>{preview.path}</strong>
@@ -386,11 +453,15 @@
                   <button type="button" aria-label="Reset diff zoom" title="Reset zoom" onclick={resetDiffZoom}>{Math.round(diffZoom * 100)}%</button>
                   <button type="button" aria-label="Zoom in diff" title="Zoom in" onclick={() => setDiffZoom(diffZoom + DIFF_ZOOM_STEP)}>+</button>
                 </div>
+                <div class="preview-mode-toggle" role="group" aria-label="Diff wrap">
+                  <button type="button" class:active={diffWrap} aria-pressed={diffWrap} title="Wrap long diff lines" onclick={() => { diffWrap = !diffWrap; }}>Wrap</button>
+                </div>
               </div>
             </header>
             {#if preview.diff}
               <pre
                 class="workspace-code-preview workspace-diff"
+                class:wrapped={diffWrap}
                 style={`--diff-zoom: ${diffZoom}`}
                 aria-label={`Diff for ${preview.path}`}
                 onpointerdown={startDiffPinch}

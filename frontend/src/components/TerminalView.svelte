@@ -172,6 +172,9 @@
   let arrowsOpen = $state(false);
   let fkeysOpen = $state(false);
   let findOpen = $state(false);
+  // Wide view: lease the pane at the relay's 240-column cap so ASCII diagrams
+  // and wide tables render unwrapped; the terminal scrolls horizontally.
+  let wideView = $state(false);
   let findQuery = $state('');
   let activeFindIndex = $state(-1);
   let ctrlArmed = $state(false);
@@ -573,9 +576,10 @@
     virtualLayoutSignature = '';
     const nextTop = resetVirtualRows(stick ? Number.POSITIVE_INFINITY : element.scrollTop);
     void tick().then(() => {
-      element.scrollTop = stick ? element.scrollHeight : nextTop;
+      const stillStuck = virtualStickToBottom;
+      element.scrollTop = stillStuck ? element.scrollHeight : nextTop;
       rememberVirtualScrollGeometry(element);
-      if (stick) virtualStickToBottom = true;
+      if (stillStuck) virtualStickToBottom = true;
       virtualScrollResetPending = false;
     });
   }
@@ -599,10 +603,9 @@
       const widthChanged = Math.abs(nextWidth - previousWidth) >= 1;
       const heightChanged = Math.abs(nextHeight - previousHeight) >= 1;
       if (renderedRows.length && widthChanged) {
-        const stick = virtualStickToBottom
-          || element.scrollHeight - element.scrollTop - element.clientHeight < 48;
-        virtualStickToBottom = stick;
-        resetVirtualScroll(element, stick);
+        // Flag only — a position check here re-pins when the user deliberately
+        // scrolled up a hair, and a clamped scrollTop looks identical.
+        resetVirtualScroll(element, virtualStickToBottom);
       } else if (heightChanged && virtualStickToBottom) {
         jumpToBottom();
       } else {
@@ -771,8 +774,11 @@
     lastContent = next.content;
     if (rendered.display === displayed && rendered.html === renderedHtml
       && next.format === lastFormat && !layoutChanged) return;
-    const frameStick = virtualStickToBottom || Boolean(terminalElement
-      && terminalElement.scrollHeight - terminalElement.scrollTop - terminalElement.clientHeight < 48);
+    // Trust the flag, not the position: re-deriving "at bottom" from a 48px
+    // check resurrects pinning when row re-measurement or content growth makes
+    // the browser clamp scrollTop onto a position that merely LOOKS near the
+    // bottom — the user's scrolled-up intent must win (jump-to-bottom bug).
+    const frameStick = virtualStickToBottom;
     const stick = resizeSessionActive && pendingResizeStick !== null
       ? pendingResizeStick
       : layoutChanged && pendingLayoutStick !== null
@@ -1052,8 +1058,7 @@
     if (!terminalElement || !entries.length) return;
     if (virtualScrollResetPending) return;
     const previousTop = terminalElement.scrollTop;
-    const wasAtBottom = virtualStickToBottom
-      || terminalElement.scrollHeight - previousTop - terminalElement.clientHeight < 48;
+    const wasAtBottom = virtualStickToBottom;
     const anchor = virtualIndex.indexAt(previousTop);
     let anchorDelta = 0;
     let changed = false;
@@ -1078,7 +1083,6 @@
     }
     if (!changed) return;
     const nextTop = wasAtBottom ? virtualIndex.total : previousTop + anchorDelta;
-    virtualStickToBottom = wasAtBottom;
     virtualScrollResetPending = true;
     renderVirtualWindow(nextTop);
     void tick().then(() => {
@@ -1086,9 +1090,11 @@
         virtualScrollResetPending = false;
         return;
       }
-      terminalElement.scrollTop = wasAtBottom ? terminalElement.scrollHeight : nextTop;
+      // Read the pin at apply time: an up-scroll can clear it between the
+      // measure pass and this tick — honour the user's position, don't slam.
+      const stillStuck = virtualStickToBottom;
+      terminalElement.scrollTop = stillStuck ? terminalElement.scrollHeight : nextTop;
       rememberVirtualScrollGeometry(terminalElement);
-      if (wasAtBottom) virtualStickToBottom = true;
       virtualScrollResetPending = false;
     });
   }
@@ -1315,6 +1321,41 @@
       sendingFilter = false;
       setTimeout(() => relayStore.readPane(target), 500);
     }
+  }
+
+  // ⌃⏎: mirror omp's ctrl+enter = app.message.followUp. The composer text must
+  // reach the omp editor first (typed via send_input, no Enter — same first
+  // half of what Send does), then the raw xterm modifyOtherKeys ctrl+enter
+  // sequence queues it. herdr has no ctrl+enter chord, hence kind:'text'.
+  async function sendCtrlEnter() {
+    if (readOnly || keySending) return;
+    const text = composer.replace(/[\r\n]+$/g, '');
+    const target = agent;
+    if (text) {
+      composer = '';
+      clearPromptDraft(target);
+      try {
+        await relayStore.sendToAgent(target, { type: 'send_input', text, activity_label: 'Queued follow-up text' });
+      } catch (error) {
+        composer = text;
+        relayStore.showToast(error instanceof Error ? error.message : 'Could not stage the follow-up text.', true);
+        return;
+      }
+    }
+    // Small settle gap so omp's editor has the text before the chord lands.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    pushDirectCommand({ kind: 'text', text: '\x1b[27;5;13~', label: 'Ctrl+Enter' });
+  }
+
+  // Wide view toggles the lease column target (relay cap) and re-leases. The
+  // pane reflows on the desktop too — documented trade-off, toggling back
+  // restores the phone-measured width.
+  function toggleWideView() {
+    wideView = !wideView;
+    requestPaneSizeLease(true);
+    relayStore.showToast(wideView
+      ? 'Wide view: pane leased at 240 columns. Swipe sideways to pan.'
+      : 'Wide view off.');
   }
 
   async function submitSecret() {
@@ -1888,6 +1929,10 @@
     // cleared the bind:this reference; there is nothing left to measure.
     if (!terminalElement) return;
     if (virtualScrollResetPending) {
+      // An up-scroll while a reset apply is in flight is still user intent:
+      // dropping it here left the pin alive and the pending apply slammed the
+      // view back to the bottom.
+      if (terminalElement.scrollTop < virtualScrollTop - 1) virtualStickToBottom = false;
       rememberVirtualScrollGeometry(terminalElement);
       return;
     }
@@ -2031,7 +2076,9 @@
     // re-leases the moment the page is visible again.
     if (!paneLeaseAllowed()) return;
     if (!paneSizeLeaseSupported(target)) return;
-    const columns = measuredPaneColumns();
+    // Wide view leases the pane at the relay's cap so ASCII art and wide
+    // tables render unwrapped; the view pans sideways to reveal them.
+    const columns = wideView ? MAX_PANE_SIZE_COLUMNS : measuredPaneColumns();
     if (columns === null) {
       if (terminalElement && cellMeasureElement) {
         paneSizeLeaseError = 'Resize Session could not measure the terminal cell width.';
@@ -2240,7 +2287,7 @@
 </script>
 
 {#snippet arrowIcon()}
-  <svg class="button-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+  <svg class="key-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="M12 2v20M2 12h20"></path>
     <path d="m8 6 4-4 4 4M8 18l4 4 4-4M6 8l-4 4 4 4M18 8l4 4-4 4"></path>
   </svg>
@@ -2261,16 +2308,44 @@
   </svg>
 {/snippet}
 
+{#snippet queueIcon()}
+  <svg class="key-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M17 3h4v4"></path>
+    <path d="M21 3 12.5 11.5"></path>
+    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7"></path>
+    <path d="M8 16h8"></path>
+    <path d="M8 12h5"></path>
+  </svg>
+{/snippet}
+{#snippet wideIcon()}
+  <svg class="button-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="m3 12 4-4m-4 4 4 4m-4-4h8"></path>
+    <path d="m21 12-4-4m4 4-4 4m4-4h-8"></path>
+  </svg>
+{/snippet}
+
 {#snippet copyIcon()}
-  <svg class="action-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+  <svg class="button-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <rect x="9" y="9" width="11" height="12" rx="2"></rect>
     <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path>
   </svg>
 {/snippet}
 {#snippet keyboardIcon()}
-  <svg class="action-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+  <svg class="button-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <rect x="2" y="5" width="20" height="14" rx="2"></rect>
     <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M9 13h6M7 17h10"></path>
+  </svg>
+{/snippet}
+{#snippet speakerIcon()}
+  <svg class="button-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M11 5 6 9H2v6h4l5 4z"></path>
+    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+  </svg>
+{/snippet}
+{#snippet stopIcon()}
+  <svg class="button-symbol" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+    <rect x="6" y="6" width="12" height="12" rx="2"></rect>
   </svg>
 {/snippet}
 {#snippet findPreviousIcon()}
@@ -2341,20 +2416,23 @@
     <div class="term-keys question-term-keys" aria-label="Terminal fallback keys" aria-busy={keySending}>
       <Button variant="secondary" size="sm" onclick={() => sendTerminalKey('Escape', 'Cancelled prompt')}>Esc</Button>
       <Button variant="secondary" size="sm" aria-label="Tab" title="Send Tab" onclick={sendTab}>{@render tabIcon()}</Button>
-      <span class="spacer"></span>
       <div class="fkey-menu">
         <Button variant="secondary" size="sm" aria-label="Function keys" aria-expanded={fkeysOpen} onclick={() => { fkeysOpen = !fkeysOpen; arrowsOpen = false; }}>
           F keys
         </Button>
-        {@render fkeyPopup()}
       </div>
       <div class="arrow-menu">
         <Button variant="secondary" size="sm" aria-label="Arrow keys" aria-expanded={arrowsOpen} onclick={() => { arrowsOpen = !arrowsOpen; fkeysOpen = false; }}>
           {@render arrowIcon()}
         </Button>
-        {@render arrowPopup()}
       </div>
       <Button variant="secondary" size="sm" aria-label="Enter" onclick={() => sendTerminalKey('Enter')}>Enter</Button>
+    </div>
+  {/if}
+  {#if questionMode && interaction}
+    <div class="question-popups">
+      {@render fkeyPopup()}
+      {@render arrowPopup()}
     </div>
   {/if}
   <div class:hidden={questionMode} class="terminal-view term">
@@ -2397,7 +2475,7 @@
     <!-- Tap-to-focus only raises the software keyboard for the hidden capture
          field; the log itself stays a non-interactive scroll region. -->
   <div
-    class:resize-layout={resizeLayoutActive} class:resize-pending={resizeLayoutPending}
+    class:resize-layout={resizeLayoutActive} class:resize-pending={resizeLayoutPending} class:wide-view={wideView}
     class="term-content preserve-layout"
     style={terminalContentStyle}
     bind:this={terminalElement}
@@ -2487,7 +2565,17 @@
         aria-pressed={directInput}
         title={directInput ? 'Stop direct typing' : 'Type directly into the terminal'}
         onclick={toggleDirectInput}
-      >{@render keyboardIcon()}<span class="direct-type-label">{directInput ? 'Typing' : 'Type'}</span></Button>
+      >{@render keyboardIcon()}</Button>
+    {/if}
+    {#if resizeSessionActive}
+      <Button
+        variant={wideView ? 'default' : 'secondary'}
+        size="sm"
+        aria-label="Toggle wide view"
+        aria-pressed={wideView}
+        title="Wide view — lease the pane at 240 columns so ASCII diagrams and wide tables stay unwrapped; swipe sideways to pan"
+        onclick={toggleWideView}
+      >{@render wideIcon()}</Button>
     {/if}
     <Button
       variant="secondary"
@@ -2507,7 +2595,7 @@
         aria-busy={fetchingSpeechText}
         disabled={fetchingSpeechText}
         onclick={() => { void speakTerminalResponse(); }}
-      >{$speechState === 'speaking' ? 'Stop' : 'Speak'}</Button>
+      >{#if $speechState === 'speaking'}{@render stopIcon()}{:else}{@render speakerIcon()}{/if}</Button>
     {/if}
   </div>
 
@@ -2786,7 +2874,6 @@
           onclick={toggleAlt}
         >Alt</Button>
       </div>
-      <span class="spacer"></span>
       <div class="fkey-menu">
         <Button
           variant="secondary"
@@ -2797,7 +2884,6 @@
           onpointerdown={(event) => event.preventDefault()}
           onclick={() => { fkeysOpen = !fkeysOpen; arrowsOpen = false; }}
         >F keys</Button>
-        {@render fkeyPopup()}
       </div>
       <div class="arrow-menu">
         <Button
@@ -2811,10 +2897,16 @@
         >
           {@render arrowIcon()}
         </Button>
-        {@render arrowPopup()}
       </div>
+      <Button variant="secondary" size="sm" disabled={readOnly || keySending || sendingPrompt} aria-label="Ctrl+Enter — queue the typed follow-up" title="Queue the typed text (Ctrl+Enter)" onpointerdown={(event) => event.preventDefault()} onclick={() => { void sendCtrlEnter(); }}>{@render queueIcon()}</Button>
       <Button variant="secondary" size="sm" disabled={readOnly || keySending} aria-label="Enter" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Enter')}>Enter</Button>
     </div>
+
+    <!-- Popups live outside the scrollable .term-keys: overflow-x:auto would
+         clip them vertically and they'd never paint. Anchored to
+         .terminal-bottom (position:relative) instead. -->
+    {@render fkeyPopup()}
+    {@render arrowPopup()}
   </div>
 </div>
 </main>

@@ -35,7 +35,9 @@
     defaultAgentView,
     initializePreferences,
     paneAgentViewOverrides,
+    pinnedConversations,
     readWorkspaceDisclosure,
+    togglePinnedConversation,
   } from '$lib/preferences';
   import { initializeSpeech, stopSpeech } from '$lib/speech';
   import { initializePush, notificationsEnabled, pushOptedIn, showPageNotification } from '$lib/push';
@@ -163,6 +165,7 @@
     return 'herdr';
   });
   const headerMeta = $derived(activeAgent ? terminalSecondaryLabel(activeAgent) : '');
+  const activePinned = $derived(Boolean(activeAgent && $pinnedConversations.includes(activeAgent.pane_id)));
   const headerIndicator = $derived.by(() => {
     if (!activeAgent) return {
       tone: inventoryUnavailable || inventoryLoading ? 'warning' : connected ? 'success' : connecting ? 'warning' : 'danger',
@@ -572,6 +575,7 @@
     data-app-assets={APP_ASSET_VERSION}
     data-app-build={APP_BUILD_ID}
   >
+    <div class="header-row header-row-top">
     {#if $currentView.view !== 'agents'}
       <Button variant="ghost" size="icon" aria-label="Back" onclick={closeCurrentView}>
         <svg class="back-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
@@ -587,12 +591,13 @@
     ></span>
     <div class="header-title">
       <div class="header-brand">
-        {#if headerTitle === 'herdr'}<BrandLogo size={20} />{/if}
-        <h1>{headerTitle}</h1>
+        {#if headerTitle === 'herdr'}<BrandLogo size={20} />{/if}<h1>{headerTitle}</h1>
       </div>
       {#if headerMeta}<span>{headerMeta}</span>{/if}
     </div>
     {#if $currentView.view === 'agents'}<span class="agent-count">{connected}/{$relays.length} relays{#if $agents.length} · {$agents.length}{/if}</span>{/if}
+    </div>
+    <div class="header-row header-row-actions">
     <nav aria-label="Application">
       <Button class="global-jump-button" variant="ghost" size="icon" aria-label="Search all agents" title="Search all agents" onclick={() => { jumpOpen = true; }}>
         <svg class="header-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">
@@ -600,6 +605,20 @@
         </svg>
       </Button>
       {#if $currentView.view === 'terminal'}
+        <Button
+          class="header-pin"
+          variant="ghost"
+          size="icon"
+          aria-label={activePinned ? 'Unpin session' : 'Pin session'}
+          aria-pressed={activePinned}
+          title={activePinned ? 'Unpin from top of agent list' : 'Pin to top of agent list'}
+          disabled={!activeAgent}
+          onclick={() => { if (activeAgent) togglePinnedConversation(activeAgent.pane_id); }}
+        >
+          <svg class="header-symbol" viewBox="0 0 24 24" fill={activePinned ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path>
+          </svg>
+        </Button>
         <Button
           variant="ghost"
           size="icon"
@@ -678,6 +697,7 @@
         {#if updateAvailable}<span class="nav-update-badge" aria-hidden="true"></span>{/if}
       </span>
     </nav>
+    </div>
   </header>
 
   {#if $currentView.view === 'settings'}

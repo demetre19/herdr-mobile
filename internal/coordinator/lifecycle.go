@@ -121,10 +121,28 @@ func (l *Lifecycle) Start(ctx context.Context, profile profiles.Profile, request
 
 	startErr := l.startInTarget(startupCtx, profile, request.Name, target.PaneID)
 	if startErr != nil {
-		// The target stays open. Herdr created it, so closing it would destroy
-		// the workspace the user asked for and leave nothing to retry into. An
-		// uncertain dispatch may also have left an agent running in it, and
-		// the phone is told to review that agent before retrying.
+		// A definitive not-started means no agent launched, so the workspace/
+		// tab createTarget just made is an orphan — an empty workspace that
+		// would otherwise linger on the desktop and reappear on the phone as
+		// a recurring empty item. Close it so a failed start leaves nothing
+		// behind; the phone can safely retry into a fresh target.
+		if errors.Is(startErr, herdr.ErrNotStarted) {
+			// Best-effort: closing the last pane collapses the empty
+			// workspace. A close failure still returns the original startErr.
+			_ = l.herdr.StopPane(startupCtx, target.PaneID)
+			return StartResult{}, startErr
+		}
+		// The dispatch outcome is uncertain (dispatched_unknown): an agent may
+		// already be running in the target. Verify before deciding — if no
+		// agent actually landed, the workspace is empty and is closed so it
+		// cannot respawn as a recurring empty item; if one is running, leave
+		// it open so the phone can review that agent before retrying.
+		if errors.Is(startErr, herdr.ErrDispatchedUnknown) {
+			if info, gerr := l.herdr.AgentGet(startupCtx, target.PaneID); gerr == nil && !info.Running {
+				_ = l.herdr.StopPane(startupCtx, target.PaneID)
+				return StartResult{}, startErr
+			}
+		}
 		return StartResult{PaneID: target.PaneID, Name: request.Name, Cwd: request.Cwd, WorkspaceID: target.WorkspaceID}, startErr
 	}
 

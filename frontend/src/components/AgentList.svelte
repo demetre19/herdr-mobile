@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import AgentLogo, { hasAgentLogo } from '$components/AgentLogo.svelte';
   import Button from '$components/ui/Button.svelte';
+  import AppDialog from '$components/ui/AppDialog.svelte';
   import {
     agentLastActiveAt,
     agentStatusGroup,
@@ -236,9 +237,135 @@
   const PRESS_SLOP_PX = 12;
   let suppressOpen = false;
 
+  // ---- Hold-to-close ------------------------------------------------------
+  // A deliberate press-and-hold on a workspace summary or tab header opens a
+  // confirm dialog; taps and scroll gestures pass through untouched.
+  interface CloseTarget {
+    kind: 'workspace' | 'tab';
+    workspace: WorkspaceGroup;
+    tab?: WorkspaceTab;
+  }
+  let closeTarget = $state<CloseTarget | null>(null);
+  let closeDialogOpen = $state(false);
+  let closeBusy = $state(false);
+
+  // Dismissing the dialog (backdrop tap, Esc, cancel) clears the pending
+  // target so a stale close can't fire later.
+  $effect(() => {
+    if (!closeDialogOpen && !closeBusy) closeTarget = null;
+  });
+
+  function closeWorkspaceRelayWorkspace(workspace: WorkspaceGroup): RelayWorkspace {
+    const known = workspaces.find((candidate) =>
+      candidate.relay_id === workspace.relayId && candidate.workspace_id === workspace.workspaceId);
+    return known ?? {
+      relay_id: workspace.relayId,
+      relay_label: workspace.relayLabel,
+      workspace_id: workspace.workspaceId,
+      number: workspace.number,
+      label: workspace.label,
+      focused: false,
+      pane_count: workspace.paneCount,
+      tab_count: workspace.tabCount,
+      active_tab_id: '',
+      agent_status: '',
+      cwd: workspace.cwd,
+    };
+  }
+
+  function closePress(node: HTMLElement, params: CloseTarget) {
+    let current = params;
+    let timer = 0;
+    let pointerId = -1;
+    let startX = 0;
+    let startY = 0;
+
+    function reset() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = 0;
+      }
+      pointerId = -1;
+    }
+
+    function onPointerDown(event: PointerEvent) {
+      if (!event.isPrimary || event.button !== 0 || closeTarget || closeBusy) return;
+      pointerId = event.pointerId;
+      startX = event.clientX;
+      startY = event.clientY;
+      timer = window.setTimeout(() => {
+        timer = 0;
+        suppressOpen = true;
+        navigator.vibrate?.(12);
+        closeTarget = current;
+        closeDialogOpen = true;
+      }, LONG_PRESS_MS);
+    }
+
+    function onPointerMove(event: PointerEvent) {
+      if (event.pointerId !== pointerId) return;
+      if (Math.hypot(event.clientX - startX, event.clientY - startY) > PRESS_SLOP_PX) reset();
+    }
+
+    function onPointerEnd(event: PointerEvent) {
+      if (event.pointerId === pointerId) reset();
+    }
+
+    function onClick(event: MouseEvent) {
+      if (!suppressOpen) return;
+      suppressOpen = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    node.addEventListener('pointerdown', onPointerDown);
+    node.addEventListener('pointermove', onPointerMove);
+    node.addEventListener('pointerup', onPointerEnd);
+    node.addEventListener('pointercancel', onPointerEnd);
+    node.addEventListener('click', onClick, true);
+    return {
+      update(next: CloseTarget) {
+        current = next;
+      },
+      destroy() {
+        node.removeEventListener('pointerdown', onPointerDown);
+        node.removeEventListener('pointermove', onPointerMove);
+        node.removeEventListener('pointerup', onPointerEnd);
+        node.removeEventListener('pointercancel', onPointerEnd);
+        node.removeEventListener('click', onClick, true);
+        reset();
+      },
+    };
+  }
+
+  async function confirmClose() {
+    const target = closeTarget;
+    if (!target || closeBusy) return;
+    closeBusy = true;
+    try {
+      if (target.kind === 'workspace') {
+        await relayStore.closeWorkspace(closeWorkspaceRelayWorkspace(target.workspace));
+        relayStore.showToast(`Closed workspace ${target.workspace.label}.`);
+      } else if (target.tab) {
+        const agents = target.tab.agents;
+        for (const agent of agents) {
+          await relayStore.sendToAgent(agent, { type: 'agent_stop' });
+        }
+        relayStore.showToast(`Stopped ${agents.length} ${agents.length === 1 ? 'agent' : 'agents'} in ${target.tab.label}.`);
+      }
+      closeDialogOpen = false;
+      closeTarget = null;
+    } catch (error) {
+      relayStore.showToast((error as Error).message, true);
+    } finally {
+      closeBusy = false;
+    }
+  }
+
+
   // Long-press a working agent card to lift its tab, drag to reorder, and
   // release to commit; a plain tap still opens the agent.
-  function reorderPress(node: HTMLElement, params: { workspace?: WorkspaceGroup; tabId: string }) {
+  function reorderPress(node: HTMLElement, params: { workspace?: WorkspaceGroup; tab?: WorkspaceTab }) {
     let current = params;
     let timer = 0;
     let pointerId = -1;
@@ -258,7 +385,7 @@
     function onPointerDown(event: PointerEvent) {
       suppressOpen = false;
       const workspace = current.workspace;
-      if (!workspace || !event.isPrimary || event.button !== 0 || movingTab) return;
+      if (!workspace || !event.isPrimary || event.button !== 0 || movingTab || closeTarget || closeBusy) return;
       pointerId = event.pointerId;
       startX = event.clientX;
       startY = event.clientY;
@@ -266,17 +393,24 @@
         timer = 0;
         const items = measureTabSlots(node);
         if (items.length < 2) {
+          // No reorder possible — the hold means "close this tab".
           reset();
+          if (current.tab) {
+            suppressOpen = true;
+            navigator.vibrate?.(12);
+            closeTarget = { kind: 'tab', workspace, tab: current.tab };
+            closeDialogOpen = true;
+          }
           return;
         }
         dragging = true;
         suppressOpen = true;
         navigator.vibrate?.(12);
         node.setPointerCapture?.(pointerId);
-        const sourceIdx = items.findIndex((item) => item.id === current.tabId);
+        const sourceIdx = items.findIndex((item) => item.id === current.tab?.id);
         tabDrag = {
           workspaceKey: workspace.key,
-          sourceTabId: current.tabId,
+          sourceTabId: current.tab?.id || '',
           pointerId,
           startY: startY + window.scrollY,
           deltaY: 0,
@@ -334,7 +468,7 @@
     node.addEventListener('contextmenu', onContextMenu);
     node.addEventListener('click', onClick, true);
     return {
-      update(next: { workspace?: WorkspaceGroup; tabId: string }) {
+      update(next: { workspace?: WorkspaceGroup; tab?: WorkspaceTab }) {
         current = next;
       },
       destroy() {
@@ -485,7 +619,8 @@
   <small class="path-row">{@render folderIcon()}<span>{path}</span></small>
 {/snippet}
 
-{#snippet agentGrid(visible: Agent[], compact: boolean, reorderWorkspace?: WorkspaceGroup, reorderTabId?: string)}
+{#snippet agentGrid(visible: Agent[], compact: boolean, workspace?: WorkspaceGroup, tab?: WorkspaceTab)}
+  {@const reorderable = Boolean(workspace && workspace.tabs.length > 1 && tabOrderingAvailable(workspace))}
   <div class:compact-agent-grid={compact} class="agent-grid">
     {#each visible as agent (agent.pane_id)}
       {@const interaction = questionInteraction(agent)}
@@ -505,10 +640,10 @@
           disabled={!inventoryReady}
           title={!inventoryReady
             ? 'This cached agent is unavailable until Herdr inventory recovers.'
-            : reorderWorkspace ? 'Hold to reorder this tab; Alt+arrow keys also work.' : undefined}
-          aria-keyshortcuts={reorderWorkspace ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
-          use:reorderPress={{ workspace: reorderWorkspace, tabId: reorderTabId ?? '' }}
-          onkeydown={reorderWorkspace ? (event) => handleTabOrderKey(event, reorderWorkspace, reorderTabId ?? '') : undefined}
+            : reorderable ? 'Hold to reorder this tab; Alt+arrow keys also work.' : 'Hold to close this tab.'}
+          aria-keyshortcuts={reorderable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
+          use:reorderPress={{ workspace, tab }}
+          onkeydown={reorderable ? (event) => handleTabOrderKey(event, workspace!, tab?.id ?? '') : undefined}
           onclick={() => onopen(agent)}
         >
           <span class="agent-identity">
@@ -582,16 +717,12 @@
         data-tab-id={tab.id}
         aria-label={`${tab.label} tab`}
         style:transform={tabShift(workspace, tab.id) || undefined}
+        use:closePress={{ kind: 'tab', workspace, tab }}
       >
-        <header class="workspace-tab-header">
+        <header class="workspace-tab-header" use:closePress={{ kind: 'tab', workspace, tab }} title="Hold to close this tab">
           <h3>{tab.label}</h3>
         </header>
-        {@render agentGrid(
-          tab.agents,
-          true,
-          workspace.tabs.length > 1 && tabOrderingAvailable(workspace) ? workspace : undefined,
-          tab.id,
-        )}
+        {@render agentGrid(tab.agents, true, workspace, tab)}
       </section>
     {/each}
   </div>
@@ -622,7 +753,7 @@
         open={workspaceDisclosure[disclosureKey] ?? openDefault}
         ontoggle={(event) => rememberWorkspaceDisclosure(disclosureKey, openDefault, event)}
       >
-        <summary>
+        <summary use:closePress={{ kind: 'workspace', workspace }} title="Hold to close this workspace">
           {#if stateTone}
             <span
               class={`status-dot workspace-state-dot status-${stateTone}`}
@@ -805,3 +936,17 @@
     </section>
   {/if}
 </main>
+
+<AppDialog
+  id="agent-list-close"
+  bind:open={closeDialogOpen}
+  title={closeTarget?.kind === 'tab' ? `Close ${closeTarget.tab?.label ?? 'tab'}?` : `Close ${closeTarget?.workspace.label ?? 'workspace'}?`}
+  description={closeTarget?.kind === 'tab'
+    ? `Stops ${closeTarget.tab?.agents.length ?? 0} agent${(closeTarget.tab?.agents.length ?? 0) === 1 ? '' : 's'} running in this tab.`
+    : 'Closes this workspace and every tab and agent in it.'}
+>
+  <div class="dialog-actions">
+    <Button variant="secondary" disabled={closeBusy} onclick={() => { closeDialogOpen = false; }}>Cancel</Button>
+    <Button variant="danger" disabled={closeBusy} onclick={confirmClose}>{closeBusy ? 'Closing…' : 'Close'}</Button>
+  </div>
+</AppDialog>

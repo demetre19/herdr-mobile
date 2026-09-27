@@ -256,6 +256,55 @@ func ReadFile(workspace, path string) (File, error) {
 	return File{Path: path, MediaType: mediaType, Kind: kind, Text: string(data), Size: info.Size()}, nil
 }
 
+// WriteFile replaces a regular workspace file's contents. The same sandbox as
+// ReadFile — the path must resolve inside the workspace root and must already
+// exist as a regular file; symlinks, directories, and escapes are refused.
+// Text only: binary payloads are rejected by the NUL check before writing.
+func WriteFile(workspace, path, text string) (File, error) {
+	root, err := openWorkspace(workspace)
+	if err != nil {
+		return File{}, err
+	}
+	defer root.Close()
+	path, err = safePath(path)
+	if err != nil {
+		return File{}, err
+	}
+	if bytes.IndexByte([]byte(text), 0) >= 0 {
+		return File{}, publicError("Binary workspace files cannot be edited")
+	}
+	if int64(len(text)) > maxTextBytes {
+		return File{}, publicError(fmt.Sprintf("Workspace file exceeds the %d MB edit limit", maxTextBytes/(1024*1024)))
+	}
+	// The lstat+open pair mirrors regularFile: refuse symlinks and confirm the
+	// opened descriptor is the file we stat-ed, so a concurrent rename cannot
+	// redirect the write outside the workspace.
+	info, err := root.root.Lstat(path)
+	if err != nil {
+		return File{}, publicError("Workspace file was not found")
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return File{}, publicError("Only regular workspace files can be edited")
+	}
+	file, err := root.root.OpenFile(path, os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+	if err != nil {
+		return File{}, publicError("Workspace file could not be opened for writing")
+	}
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		_ = file.Close()
+		return File{}, publicError("Workspace file changed while it was opening")
+	}
+	if _, err := io.WriteString(file, text); err != nil {
+		_ = file.Close()
+		return File{}, publicError("Workspace file could not be written")
+	}
+	if err := file.Close(); err != nil {
+		return File{}, publicError("Workspace file could not be closed")
+	}
+	return File{Path: path, Kind: "text", Size: int64(len(text))}, nil
+}
+
 type boundedBuffer struct {
 	buffer bytes.Buffer
 	limit  int

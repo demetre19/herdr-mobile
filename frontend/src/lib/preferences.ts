@@ -35,6 +35,7 @@ import {
   type Theme,
 } from './config';
 import { setTerminalScheme } from './terminal';
+import { workspaceIdentity } from './workspaces';
 import type { Agent } from './types';
 import {
   isAgentView,
@@ -385,6 +386,45 @@ export function togglePinnedWorkspace(key: string): 'saved' | 'unavailable' {
   return 'saved';
 }
 
+/**
+ * Drop workspace pins whose target no longer exists on a connected relay.
+ * The desktop is the source of truth: once a workspace is closed there, its
+ * pin must not survive to re-match a later workspace in the same directory
+ * (workspaceIdentity falls back to cwd), which is what made a closed item
+ * "keep popping" back as an empty workspace. Pins for a relay with no live
+ * snapshot are kept — it may be disconnected rather than empty.
+ */
+export function prunePinnedWorkspaces(
+  agents: readonly Agent[],
+  workspaces: readonly { relay_id: string; workspace_id: string }[],
+): void {
+  const current = get(pinnedWorkspaces);
+  if (!current.length) return;
+  const liveRelays = new Set<string>();
+  const liveKeys = new Set<string>();
+  for (const agent of agents) {
+    liveRelays.add(agent.relay_id);
+    liveKeys.add(workspaceIdentity(agent));
+  }
+  for (const workspace of workspaces) {
+    liveRelays.add(workspace.relay_id);
+    liveKeys.add(`${workspace.relay_id}\u0000${workspace.workspace_id}`);
+  }
+  const next = current.filter((key) => {
+    const relayId = key.slice(0, key.indexOf('\u0000'));
+    if (!liveRelays.has(relayId)) return true;
+    return liveKeys.has(key);
+  });
+  if (next.length === current.length) return;
+  try {
+    if (next.length) localStorage.setItem(PINNED_WORKSPACES_KEY, JSON.stringify(next));
+    else localStorage.removeItem(PINNED_WORKSPACES_KEY);
+  } catch {
+    return;
+  }
+  pinnedWorkspaces.set(next);
+}
+
 // --- Pinned conversations ----------------------------------------------------
 
 export function readPinnedConversations(storage?: Pick<Storage, 'getItem'>): string[] {
@@ -415,6 +455,36 @@ export function togglePinnedConversation(paneId: string): 'saved' | 'unavailable
   }
   pinnedConversations.set(next);
   return 'saved';
+}
+
+/**
+ * Drop conversation pins whose pane no longer exists on a connected relay.
+ * Same source-of-truth rule as workspaces: a closed pane's pin must not
+ * linger to re-match a recycled pane id. Pins for a relay with no live
+ * snapshot are kept — it may be disconnected rather than empty.
+ */
+export function prunePinnedConversations(agents: readonly Agent[]): void {
+  const current = get(pinnedConversations);
+  if (!current.length) return;
+  const liveRelays = new Set<string>();
+  const livePanes = new Set<string>();
+  for (const agent of agents) {
+    liveRelays.add(agent.relay_id);
+    livePanes.add(agent.pane_id);
+  }
+  const next = current.filter((paneId) => {
+    const relayId = paneId.slice(0, paneId.indexOf('::'));
+    if (!liveRelays.has(relayId)) return true;
+    return livePanes.has(paneId);
+  });
+  if (next.length === current.length) return;
+  try {
+    if (next.length) localStorage.setItem(PINNED_CONVERSATIONS_KEY, JSON.stringify(next));
+    else localStorage.removeItem(PINNED_CONVERSATIONS_KEY);
+  } catch {
+    return;
+  }
+  pinnedConversations.set(next);
 }
 
 // --- Workspace disclosure persistence (FR4) ----------------------------------
