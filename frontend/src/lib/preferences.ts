@@ -387,6 +387,22 @@ export function togglePinnedWorkspace(key: string): 'saved' | 'unavailable' {
 }
 
 /**
+ * Persist a reordered pinned-workspace list. The pin array is the display
+ * order: drag ordering rewrites it wholesale rather than diffing entries.
+ */
+export function reorderPinnedWorkspaces(order: string[]): 'saved' | 'unavailable' {
+  const next = order.filter((key) => key);
+  try {
+    if (next.length) localStorage.setItem(PINNED_WORKSPACES_KEY, JSON.stringify(next));
+    else localStorage.removeItem(PINNED_WORKSPACES_KEY);
+  } catch {
+    return 'unavailable';
+  }
+  pinnedWorkspaces.set(next);
+  return 'saved';
+}
+
+/**
  * Drop workspace pins whose target no longer exists on a connected relay.
  * The desktop is the source of truth: once a workspace is closed there, its
  * pin must not survive to re-match a later workspace in the same directory
@@ -447,6 +463,22 @@ export function togglePinnedConversation(paneId: string): 'saved' | 'unavailable
   const next = current.includes(paneId)
     ? current.filter((entry) => entry !== paneId)
     : [paneId, ...current];
+  try {
+    if (next.length) localStorage.setItem(PINNED_CONVERSATIONS_KEY, JSON.stringify(next));
+    else localStorage.removeItem(PINNED_CONVERSATIONS_KEY);
+  } catch {
+    return 'unavailable';
+  }
+  pinnedConversations.set(next);
+  return 'saved';
+}
+
+/**
+ * Persist a reordered pinned-conversation list. Unlike toggles this writes the
+ * whole array — drag ordering is the source of truth for display order.
+ */
+export function reorderPinnedConversations(order: string[]): 'saved' | 'unavailable' {
+  const next = order.filter((paneId) => paneId);
   try {
     if (next.length) localStorage.setItem(PINNED_CONVERSATIONS_KEY, JSON.stringify(next));
     else localStorage.removeItem(PINNED_CONVERSATIONS_KEY);
