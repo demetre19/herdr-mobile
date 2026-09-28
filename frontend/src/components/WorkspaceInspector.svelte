@@ -38,7 +38,8 @@
   let workspaceGeneration = 0;
   let previewGeneration = 0;
   let loadedIdentity = '';
-  let sidebarOpen = $state(true);
+  type SidebarMode = 'open' | 'wide' | 'hidden';
+  let sidebarMode: SidebarMode = $state('open');
   let sidebarSwipe: { pointerId: number; x: number; y: number } | null = null;
   const MIN_DIFF_ZOOM = 0.7;
   const MAX_DIFF_ZOOM = 2.5;
@@ -117,7 +118,7 @@
     const vertical = Math.abs(start.y - event.clientY);
     if (horizontal < 48 || horizontal < vertical * 1.25) return;
     event.preventDefault();
-    sidebarOpen = false;
+    sidebarMode = 'hidden';
   }
 
   function cancelSidebarSwipe() {
@@ -201,7 +202,7 @@
     const current = ++workspaceGeneration;
     previewGeneration += 1;
     query = '';
-    sidebarOpen = true;
+    sidebarMode = 'open';
     section = 'files';
     tree = null;
     git = null;
@@ -238,6 +239,8 @@
 
   async function showFile(path: string) {
     if (!agent) return;
+    // Wide list exists only to pick a file; drop back to the split on select.
+    if (sidebarMode === 'wide') sidebarMode = 'open';
     const current = ++previewGeneration;
     selectedPath = path;
     preview = null;
@@ -258,6 +261,7 @@
 
   async function showDiff(path: string) {
     if (!agent) return;
+    if (sidebarMode === 'wide') sidebarMode = 'open';
     const current = ++previewGeneration;
     selectedPath = path;
     preview = null;
@@ -280,7 +284,7 @@
     previewGeneration += 1;
     previewLoading = false;
     section = next;
-    sidebarOpen = true;
+    sidebarMode = 'open';
     preview = null;
     selectedPath = '';
     resetDiffZoom();
@@ -342,13 +346,23 @@
           class="workspace-sidebar-toggle"
           variant="ghost"
           size="icon"
-          aria-label={sidebarOpen ? `Hide ${section === 'files' ? 'file list' : 'changed-file list'}` : `Show ${section === 'files' ? 'file list' : 'changed-file list'}`}
-          title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-          onclick={() => { sidebarOpen = !sidebarOpen; }}
+          aria-label={sidebarMode === 'open' ? `Expand ${section === 'files' ? 'file list' : 'changed-file list'} to full width` : sidebarMode === 'wide' ? `Hide ${section === 'files' ? 'file list' : 'changed-file list'}` : `Show ${section === 'files' ? 'file list' : 'changed-file list'}`}
+          title={sidebarMode === 'open' ? 'Expand sidebar' : sidebarMode === 'wide' ? 'Hide sidebar' : 'Show sidebar'}
+          onclick={() => { sidebarMode = sidebarMode === 'open' ? 'wide' : sidebarMode === 'wide' ? 'hidden' : 'open'; }}
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">
-            <path d="M4 6h16M4 12h16M4 18h16"></path>
-          </svg>
+          {#if sidebarMode === 'wide'}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M9 18l-6-6 6-6"></path><path d="M3 12h18"></path>
+            </svg>
+          {:else if sidebarMode === 'hidden'}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">
+              <path d="M4 6h16M4 12h16M4 18h16"></path>
+            </svg>
+          {:else}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M15 18l6-6-6-6"></path><path d="M21 12H3"></path>
+            </svg>
+          {/if}
         </Button>
         {#if git?.available && git.branch}<span class="git-branch" title="Git branch">{git.branch}</span>{/if}
         {#if git?.available}
@@ -364,8 +378,8 @@
         </label>
       </div>
 
-      <div class:sidebar-collapsed={!sidebarOpen} class="workspace-body">
-        {#if sidebarOpen}<aside
+      <div class:sidebar-collapsed={sidebarMode === 'hidden'} class:sidebar-wide={sidebarMode === 'wide'} class="workspace-body">
+        {#if sidebarMode !== 'hidden'}<aside
           aria-label={section === 'files' ? 'Workspace files' : 'Changed files'}
           onpointerdown={startSidebarSwipe}
           onpointerup={finishSidebarSwipe}
