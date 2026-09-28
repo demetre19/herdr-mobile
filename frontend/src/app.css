@@ -465,24 +465,23 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .agent-identity > .status-dot { bottom: -.02rem; box-shadow: 0 0 0 2px var(--card); height: .46rem; position: absolute; right: -.02rem; width: .46rem; }
 .agent-open:hover .agent-identity > .status-dot { box-shadow: 0 0 0 2px var(--card-hover); }
 .agent-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; }
-.agent-project { font-size: .9rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-title-row { align-items: baseline; display: flex; gap: .5rem; min-width: 0; }
+.agent-project { font-size: .95rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-title-row { align-items: baseline; display: flex; flex-wrap: wrap; gap: .2rem .5rem; min-width: 0; }
 .agent-title-row .agent-project { flex: 1; }
 .agent-age { color: var(--muted); flex: 0 0 auto; font-size: .66rem; font-variant-numeric: tabular-nums; }
-/* One line, one directory: the icon and the age keep their size while the
-   path itself takes the remaining width and truncates. */
-.path-row, .agent-path { align-items: center; display: flex; gap: .28rem; min-width: 0; }
-.path-row > span, .agent-path > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.path-symbol { flex: 0 0 auto; height: .85em; stroke: var(--muted); width: .85em; }
-.agent-path { flex: 1; font-size: .8rem; font-weight: 600; }
-.agent-title-row .agent-path { align-self: center; }
+/* The directory always renders in full — it wraps rather than truncating.
+   In compact cards it shares the title row with the tab name. */
+.path-row, .agent-path { align-items: baseline; display: flex; gap: .28rem; min-width: 0; }
+.path-row > span, .agent-path > span { min-width: 0; overflow-wrap: anywhere; }
+.path-symbol { align-self: center; flex: 0 0 auto; height: .85em; stroke: var(--muted); width: .85em; }
+.agent-path { color: var(--muted); flex: 1; font-size: .78rem; font-weight: 600; }
+.agent-title-row .agent-path { align-self: flex-start; flex: 1 1 12rem; margin-top: 0; }
+.agent-tab-name { color: var(--foreground); flex: 0 1 auto; font-size: .9rem; font-weight: 700; max-width: 55%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .compact-agent-grid { gap: .28rem; }
 .compact-agent-card { background: color-mix(in srgb, var(--card) 78%, transparent); border-radius: .58rem; }
 .compact-agent-card .agent-open { align-items: center; padding: .54rem .68rem; }
 .compact-agent-card .agent-identity { height: 1.25rem; width: 1.25rem; }
 .compact-agent-card .agent-logo { height: 1.18rem; width: 1.18rem; }
-.compact-agent-card .agent-project { font-size: .82rem; }
-.compact-agent-card .agent-meta { margin-top: .04rem; }
 .host-badge { color: var(--primary); font-size: .68rem; font-weight: 600; }
 .agent-meta { color: var(--muted); font-size: .7rem; margin-top: .12rem; }
 .prompt-preview { color: var(--foreground); display: -webkit-box; font-family: ui-monospace, monospace; font-size: .72rem; line-height: 1.35; margin-top: .55rem; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
@@ -1019,12 +1018,12 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .workspace-card > summary::before { color: var(--muted); content: '›'; flex: 0 0 auto; font-size: 1.1rem; transform: rotate(0); transition: transform .12s; }
 .workspace-card[open] > summary::before { transform: rotate(90deg); }
 .workspace-card-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; }
-.workspace-card-copy strong { font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-card-copy strong { font-size: .95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Label and computer share the first line; the label yields width first. */
 .workspace-card-title { align-items: baseline; display: flex; gap: .4rem; min-width: 0; }
 .workspace-card-title > strong { min-width: 0; }
 .workspace-card-title > .host-badge { flex: 0 0 auto; }
-.workspace-card-copy small { color: var(--muted); font-size: .65rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-card-copy small { color: var(--muted); font-size: .65rem; }
 .workspace-counts { align-items: flex-end; color: var(--muted); display: flex; flex: 0 0 auto; flex-direction: column; font-size: .62rem; line-height: 1.35; }
 .workspace-working-count { color: var(--warning); font-style: normal; font-weight: 700; }
 .workspace-done-count { color: var(--success); font-style: normal; font-weight: 700; }
@@ -1040,7 +1039,7 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .agent-pin.pinned, .agent-pin.pinned:hover { color: #ff8a4c; }
 .done-workspace-card { border-color: color-mix(in srgb, var(--success) 42%, var(--border)); }
 .workspace-state-dot { margin-inline-start: -.1rem; }
-.workspace-tabs { border-top: 1px solid var(--border); display: grid; gap: .55rem; padding: .55rem .7rem .7rem; }
+.workspace-tabs { border-top: 1px solid var(--border); display: grid; gap: .4rem; padding: .55rem .7rem .7rem; }
 .workspace-provenance, .workspace-empty { color: var(--muted); font-size: .68rem; margin: 0; padding: .55rem .8rem; }
 .workspace-provenance { border-top: 1px solid var(--border); padding-bottom: 0; }
 .workspace-empty { border-top: 1px solid var(--border); }
@@ -1054,8 +1053,9 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .workspace-worktree-card::after { background: var(--tree-line); content: ''; height: 1px; left: 1px; position: absolute; top: 1.1rem; width: .6rem; }
 .workspace-worktree-card > header { align-items: center; display: grid; gap: .55rem; grid-template-columns: minmax(0, 1fr) auto; padding: .6rem 0 .5rem; }
 .workspace-worktree-card > header > span:first-child { display: flex; flex-direction: column; min-width: 0; }
-.workspace-worktree-card > header strong { font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-worktree-card > header small, .workspace-worktree-card > header > span:last-child { color: var(--muted); font-size: .62rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-worktree-card > header strong { font-size: .82rem; min-width: 0; overflow-wrap: anywhere; }
+.workspace-worktree-card > header small { color: var(--muted); font-size: .62rem; }
+.workspace-worktree-card > header > span:last-child { color: var(--muted); flex: 0 0 auto; font-size: .62rem; white-space: nowrap; }
 .workspace-worktree-card .workspace-tabs { border-top: 0; padding: 0 0 .55rem; }
 .workspace-worktree-card .workspace-empty { border-top: 0; font-size: .62rem; padding: 0 0 .55rem; }
 
@@ -1089,14 +1089,15 @@ textarea { min-height: 6.5rem; resize: vertical; }
 /* Long-press starts a tab drag; selectable text would trigger the platform
    text-selection and search sheets instead. */
 .agent-list, .agent-rail { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
-.workspace-tab { position: relative; }
-/* The 2.4rem floor dated from the header's removed reorder buttons; the
-   label-only header hugs its tab so name and agent read as one unit. */
-.workspace-tab-header { align-items: center; display: flex; }
-.workspace-tab-header h3 { color: var(--muted); flex: 1; font-size: .65rem; letter-spacing: .04em; margin: 0 0 .35rem .15rem; text-transform: uppercase; }
+/* Tabs nest inside the workspace card: a slight left indent so the workspace
+   header owns the left edge and tab rows sit one level in. */
+.workspace-tab { padding-left: .45rem; position: relative; }
 .compact-agent-grid .agent-open { touch-action: pan-y; }
 .workspace-tab.tab-dragging { box-shadow: 0 .55rem 1.6rem rgb(0 0 0 / .38); border-radius: .625rem; opacity: .95; z-index: 2; }
 .workspace-tab.tab-dragging .agent-card { background: var(--card-hover); }
+/* Dragged pinned card lifts above siblings; same affordance as tab drag. */
+.pin-dragging { box-shadow: 0 .55rem 1.6rem rgb(0 0 0 / .38); position: relative; z-index: 2; }
+.agent-card.pin-dragging { background: var(--card-hover); }
 
 .jump-search { display: block; margin-bottom: .65rem; }
 .jump-results { display: flex; flex-direction: column; gap: .8rem; max-height: min(62dvh, 34rem); overflow-y: auto; }
@@ -1135,6 +1136,11 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .workspace-search input { min-height: 2.3rem; padding: .45rem .6rem; }
 .workspace-body { display: grid; flex: 1 1 auto; grid-template-columns: minmax(9rem, 36%) minmax(0, 1fr); min-height: 0; }
 .workspace-body.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); }
+/* Wide sidebar: file list takes the whole dialog width so deep paths and
+   changed-file names are readable; the preview pane drops out entirely. */
+.workspace-body.sidebar-wide { grid-template-columns: minmax(0, 1fr); }
+.workspace-body.sidebar-wide > aside { border-right: 0; }
+.workspace-body.sidebar-wide > main { display: none; }
 .workspace-body > aside { border-right: 1px solid var(--border); min-width: 0; overflow: auto; padding: .25rem; touch-action: pan-y; }
 .workspace-body > aside > button, .workspace-directory { align-items: center; background: transparent; border: 0; border-radius: .38rem; color: var(--foreground); display: flex; font-size: .7rem; min-height: 2rem; overflow: hidden; padding: .35rem .45rem .35rem calc(.45rem + var(--path-depth, 0) * .7rem); text-align: left; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
 .workspace-directory { color: var(--muted); }
@@ -1223,9 +1229,12 @@ textarea { min-height: 6.5rem; resize: vertical; }
 :root[data-interface-size='large'] body[data-view='terminal'] .header-row-actions {
   justify-content: center;
 }
+/* margin: 0 auto centers the nav even if it ends up wider than its content;
+   justify-content on the parent centers a content-sized nav. */
 :root[data-interface-size='regular'] body[data-view='terminal'] .header-row-actions nav,
 :root[data-interface-size='large'] body[data-view='terminal'] .header-row-actions nav {
-  margin-left: 0;
+  margin-left: auto;
+  margin-right: auto;
   gap: 0;
 }
 :root[data-interface-size='regular'] body[data-view='terminal'] .header-row-actions nav .button-icon,
@@ -1254,10 +1263,17 @@ textarea { min-height: 6.5rem; resize: vertical; }
   margin-right: -.65rem;
   padding: .12rem .65rem .1rem;
 }
+/* Compact keeps the single right-aligned line (base `margin-left: auto` on
+   the nav); the buttons shrink so the lone row stays slim. */
+:root[data-interface-size='compact'] .app-header nav .button-icon {
+  height: 2.05rem;
+  min-height: 2.05rem;
+  width: 2.05rem;
+}
 
-/* Type / Copy / Speak overlay: icon-only buttons in a horizontal row pinned
-   top-right so they shade the least terminal text at every interface size. */
-.terminal-copy { display: flex; flex-direction: row; gap: .3rem; justify-content: flex-end; padding: .2rem .5rem; position: absolute; right: 0; top: 0; z-index: 2; }
+/* Type / Wrap / Copy / Speak overlay: icon-only buttons in a horizontal row
+   pinned top-center so they shade the least terminal text at every size. */
+.terminal-copy { display: flex; flex-direction: row; gap: .3rem; justify-content: center; padding: .2rem .5rem; position: absolute; right: 0; left: 0; top: 0; z-index: 2; }
 .terminal-copy .button { min-width: 0; font-size: 0; padding: .4rem .6rem; }
 .terminal-copy .button .action-symbol, .terminal-copy .button .button-symbol { display: inline-block; height: 1.15rem; width: 1.15rem; }
 :root[data-interface-size='regular'] body[data-view='terminal'] .app-shell,

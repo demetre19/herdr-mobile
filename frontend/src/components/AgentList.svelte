@@ -16,7 +16,7 @@
     sortedAgents,
     tabName,
   } from '$lib/agents';
-  import { homeLayout, persistWorkspaceDisclosure, pinnedConversations, pinnedWorkspaces, togglePinnedConversation, togglePinnedWorkspace } from '$lib/preferences';
+  import { homeLayout, persistWorkspaceDisclosure, pinnedConversations, pinnedWorkspaces, reorderPinnedConversations, reorderPinnedWorkspaces, togglePinnedConversation, togglePinnedWorkspace } from '$lib/preferences';
   import { relayStore } from '$lib/store';
   import type { Agent, RelayConfig, RelayConnectionView, RelayWorkspace } from '$lib/types';
   import { homeRelativePath, informativePath, workspaceGroupTrees, workspaceGroups, workspaceIdentity, workspaceProvenance, workspaceStateTone, type WorkspaceGroup, type WorkspaceGroupTree, type WorkspaceTab } from '$lib/workspaces';
@@ -67,6 +67,18 @@
   let tabDrag = $state<{
     workspaceKey: string;
     sourceTabId: string;
+    pointerId: number;
+    startY: number;
+    deltaY: number;
+    insertIdx: number;
+    items: TabSlot[];
+    gap: number;
+  } | null>(null);
+  // Pinned-list drag: same long-press → lift → drag → commit as tab reorder,
+  // but over a flat localStorage-backed list instead of relay state.
+  let pinDrag = $state<{
+    kind: 'conversation' | 'workspace';
+    sourceKey: string;
     pointerId: number;
     startY: number;
     deltaY: number;
@@ -289,12 +301,14 @@
     }
 
     function onPointerDown(event: PointerEvent) {
-      if (!event.isPrimary || event.button !== 0 || closeTarget || closeBusy) return;
+      if (!event.isPrimary || event.button !== 0 || closeTarget || closeBusy || pinDrag) return;
       pointerId = event.pointerId;
       startX = event.clientX;
       startY = event.clientY;
       timer = window.setTimeout(() => {
         timer = 0;
+        // A pinned-list drag may have won the same hold — close loses to drag.
+        if (pinDrag) return;
         suppressOpen = true;
         navigator.vibrate?.(12);
         closeTarget = current;
@@ -484,6 +498,175 @@
     };
   }
 
+  // --- Pinned-list drag reorder ----------------------------------------------
+  // Flat-list version of reorderPress: long-press lifts the pinned card, drag
+  // previews the slot, release writes the new order into localStorage.
+
+  function measurePinSlots(node: HTMLElement, kind: 'conversation' | 'workspace'): TabSlot[] {
+    const section = node.closest('.pinned-section');
+    if (!section) return [];
+    const selector = kind === 'conversation' ? '.agent-card' : '.workspace-card';
+    return [...section.querySelectorAll<HTMLElement>(selector)]
+      .map((element) => {
+        const bounds = element.getBoundingClientRect();
+        return { id: element.dataset.pinKey || '', top: bounds.top + window.scrollY, height: bounds.height };
+      })
+      .filter((item) => item.id);
+  }
+
+  function trackPinDrag(event: PointerEvent) {
+    if (!pinDrag || pinDrag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    if (event.clientY < 72) window.scrollBy(0, -12);
+    else if (event.clientY > window.innerHeight - 72) window.scrollBy(0, 12);
+    const pointerY = event.clientY + window.scrollY;
+    let insertIdx = 0;
+    for (const item of pinDrag.items) {
+      if (item.id === pinDrag.sourceKey) continue;
+      if (pointerY > item.top + item.height / 2) insertIdx += 1;
+    }
+    pinDrag = { ...pinDrag, deltaY: pointerY - pinDrag.startY, insertIdx };
+  }
+
+  // The dragged card follows the pointer; siblings shift by its height to
+  // preview the drop slot — same model as tabShift.
+  function pinShift(key: string): string {
+    if (!pinDrag) return '';
+    if (key === pinDrag.sourceKey) return `translateY(${pinDrag.deltaY}px)`;
+    const { items, sourceKey, insertIdx, gap } = pinDrag;
+    const sourceIdx = items.findIndex((item) => item.id === sourceKey);
+    const itemIdx = items.findIndex((item) => item.id === key);
+    if (sourceIdx < 0 || itemIdx < 0) return '';
+    const span = items[sourceIdx].height + gap;
+    const othersIdx = itemIdx > sourceIdx ? itemIdx - 1 : itemIdx;
+    const shift = (itemIdx > sourceIdx ? -span : 0) + (othersIdx >= insertIdx ? span : 0);
+    return shift ? `translateY(${shift}px)` : '';
+  }
+
+  function finishPinDrag() {
+    if (!pinDrag) return;
+    const completed = pinDrag;
+    pinDrag = null;
+    const sourceIdx = completed.items.findIndex((item) => item.id === completed.sourceKey);
+    if (sourceIdx < 0 || completed.insertIdx === sourceIdx) return;
+    const others = completed.items.filter((item) => item.id !== completed.sourceKey);
+    const order = [
+      ...others.slice(0, completed.insertIdx).map((item) => item.id),
+      completed.sourceKey,
+      ...others.slice(completed.insertIdx).map((item) => item.id),
+    ];
+    void (completed.kind === 'conversation'
+      ? reorderPinnedConversations(order)
+      : reorderPinnedWorkspaces(order));
+  }
+
+  function pinPress(node: HTMLElement, params: { kind?: 'conversation' | 'workspace'; key: string }) {
+    let current = params;
+    let timer = 0;
+    let pointerId = -1;
+    let startX = 0;
+    let startY = 0;
+    let dragging = false;
+
+    function reset() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = 0;
+      }
+      pointerId = -1;
+      dragging = false;
+    }
+
+    function onPointerDown(event: PointerEvent) {
+      suppressOpen = false;
+      if (!event.isPrimary || event.button !== 0 || movingTab || pinDrag || closeTarget || closeBusy || !current.kind) return;
+      pointerId = event.pointerId;
+      startX = event.clientX;
+      startY = event.clientY;
+      timer = window.setTimeout(() => {
+        timer = 0;
+        const kind = current.kind;
+        if (!kind) return reset();
+        const items = measurePinSlots(node, kind);
+        if (items.length < 2) return reset();
+        dragging = true;
+        suppressOpen = true;
+        navigator.vibrate?.(12);
+        node.setPointerCapture?.(pointerId);
+        pinDrag = {
+          kind,
+          sourceKey: current.key,
+          pointerId,
+          startY: startY + window.scrollY,
+          deltaY: 0,
+          insertIdx: Math.max(0, items.findIndex((item) => item.id === current.key)),
+          items,
+          gap: items.length > 1 ? Math.max(0, items[1].top - items[0].top - items[0].height) : 12,
+        };
+      }, LONG_PRESS_MS);
+    }
+
+    function onPointerMove(event: PointerEvent) {
+      if (event.pointerId !== pointerId) return;
+      if (!dragging) {
+        if (Math.hypot(event.clientX - startX, event.clientY - startY) > PRESS_SLOP_PX) reset();
+        return;
+      }
+      event.preventDefault();
+      trackPinDrag(event);
+    }
+
+    function onPointerUp(event: PointerEvent) {
+      if (event.pointerId !== pointerId) return;
+      if (dragging) finishPinDrag();
+      reset();
+    }
+
+    function onPointerCancel(event: PointerEvent) {
+      if (event.pointerId !== pointerId) return;
+      if (pinDrag?.pointerId === event.pointerId) pinDrag = null;
+      reset();
+    }
+
+    function onTouchMove(event: TouchEvent) {
+      if (dragging) event.preventDefault();
+    }
+
+    function onContextMenu(event: Event) {
+      if (dragging || timer) event.preventDefault();
+    }
+
+    function onClick(event: MouseEvent) {
+      if (!suppressOpen) return;
+      suppressOpen = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    node.addEventListener('pointerdown', onPointerDown);
+    node.addEventListener('pointermove', onPointerMove);
+    node.addEventListener('pointerup', onPointerUp);
+    node.addEventListener('pointercancel', onPointerCancel);
+    node.addEventListener('touchmove', onTouchMove, { passive: false });
+    node.addEventListener('contextmenu', onContextMenu);
+    node.addEventListener('click', onClick, true);
+    return {
+      update(next: { kind?: 'conversation' | 'workspace'; key: string }) {
+        current = next;
+      },
+      destroy() {
+        node.removeEventListener('pointerdown', onPointerDown);
+        node.removeEventListener('pointermove', onPointerMove);
+        node.removeEventListener('pointerup', onPointerUp);
+        node.removeEventListener('pointercancel', onPointerCancel);
+        node.removeEventListener('touchmove', onTouchMove);
+        node.removeEventListener('contextmenu', onContextMenu);
+        node.removeEventListener('click', onClick, true);
+        reset();
+      },
+    };
+  }
+
   // Slots are captured in document coordinates when the drag starts, so the
   // preview stays correct while the page auto-scrolls under the pointer.
   function measureTabSlots(node: HTMLElement): TabSlot[] {
@@ -619,7 +802,7 @@
   <small class="path-row">{@render folderIcon()}<span>{path}</span></small>
 {/snippet}
 
-{#snippet agentGrid(visible: Agent[], compact: boolean, workspace?: WorkspaceGroup, tab?: WorkspaceTab)}
+{#snippet agentGrid(visible: Agent[], compact: boolean, workspace?: WorkspaceGroup, tab?: WorkspaceTab, pinKind?: 'conversation')}
   {@const reorderable = Boolean(workspace && workspace.tabs.length > 1 && tabOrderingAvailable(workspace))}
   <div class:compact-agent-grid={compact} class="agent-grid">
     {#each visible as agent (agent.pane_id)}
@@ -633,7 +816,7 @@
       {@const age = relativeAge(agent)}
       {@const agentPath = compact ? relayPath(agent.relay_id, String(agent.cwd || '')) : ''}
       {@const inventoryReady = !connections.has(agent.relay_id) || connections.get(agent.relay_id)?.inventory.state === 'ready'}
-      <article class:blocked class:compact-agent-card={compact} class:stale={!inventoryReady} class="agent-card">
+      <article class:blocked class:compact-agent-card={compact} class:stale={!inventoryReady} class:pin-dragging={pinDrag !== null && pinDrag.kind === pinKind && pinDrag.sourceKey === agent.pane_id} class="agent-card" data-pin-key={pinKind ? agent.pane_id : undefined} style:transform={pinKind ? pinShift(agent.pane_id) || undefined : undefined} use:pinPress={{ kind: pinKind, key: agent.pane_id }}>
         <button
           class="agent-open"
           aria-label={`Open ${displayName(agent)} on ${hostLabel(agent)}`}
@@ -652,18 +835,21 @@
           </span>
           <span class="agent-copy">
             <span class="agent-title-row">
-              {#if agentPath}
-                <!-- Inside a workspace card the computer is named once, on the
-                     card, so the row spends its width on the directory. -->
-                <span class="agent-path">{@render folderIcon()}<span>{agentPath}</span></span>
+              {#if compact}
+                <span class="agent-tab-name">{tabName(agent) || displayName(agent)}</span>
+                {#if agentPath}
+                  <!-- Inside a workspace card the computer is named once, on
+                       the card, so the row spends its width on the directory. -->
+                  <span class="agent-path">{@render folderIcon()}<span>{agentPath}</span></span>
+                {/if}
               {:else}
-                <span class="agent-project">{displayName(agent)}{#if !compact} <span class="host-badge">@{hostLabel(agent)}</span>{/if}</span>
+                <span class="agent-project">{displayName(agent)} <span class="host-badge">@{hostLabel(agent)}</span></span>
               {/if}
               {#if compact && age}
                 <time class="agent-age" datetime={new Date(agentLastActiveAt(agent)).toISOString()} title={new Date(agentLastActiveAt(agent)).toLocaleString()}>{age}</time>
               {/if}
             </span>
-            {#if meta}<span class="agent-meta">{meta}</span>{/if}
+            {#if !compact && meta}<span class="agent-meta">{meta}</span>{/if}
             {#if blocked || needsInspection}
               <span class="prompt-preview">{interaction?.question || approvalPromptPreview(agent)}</span>
             {/if}
@@ -719,9 +905,6 @@
         style:transform={tabShift(workspace, tab.id) || undefined}
         use:closePress={{ kind: 'tab', workspace, tab }}
       >
-        <header class="workspace-tab-header" use:closePress={{ kind: 'tab', workspace, tab }} title="Hold to close this tab">
-          <h3>{tab.label}</h3>
-        </header>
         {@render agentGrid(tab.agents, true, workspace, tab)}
       </section>
     {/each}
@@ -731,7 +914,7 @@
   {/if}
 {/snippet}
 
-{#snippet workspaceGrid(trees: WorkspaceGroupTree[], defaultOpen: boolean, kind: 'working' | 'done' | 'idle' | 'mixed')}
+{#snippet workspaceGrid(trees: WorkspaceGroupTree[], defaultOpen: boolean, kind: 'working' | 'done' | 'idle' | 'mixed', pinnedList = false)}
   <div class="workspace-grid">
     {#each trees as tree (tree.workspace.key)}
       {@const workspace = tree.workspace}
@@ -749,11 +932,14 @@
       <details
         class:working-workspace-card={working}
         class:done-workspace-card={done}
+        class:pin-dragging={pinnedList && pinDrag?.kind === 'workspace' && pinDrag.sourceKey === workspace.key}
         class="workspace-card"
+        data-pin-key={pinnedList ? workspace.key : undefined}
+        style:transform={pinnedList ? pinShift(workspace.key) || undefined : undefined}
         open={workspaceDisclosure[disclosureKey] ?? openDefault}
         ontoggle={(event) => rememberWorkspaceDisclosure(disclosureKey, openDefault, event)}
       >
-        <summary use:closePress={{ kind: 'workspace', workspace }} title="Hold to close this workspace">
+        <summary use:pinPress={{ kind: pinnedList ? 'workspace' : undefined, key: workspace.key }} use:closePress={{ kind: 'workspace', workspace }} title={pinnedList ? 'Hold to reorder or close this workspace' : 'Hold to close this workspace'}>
           {#if stateTone}
             <span
               class={`status-dot workspace-state-dot status-${stateTone}`}
@@ -872,7 +1058,7 @@
         <svg class="section-pin-icon" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path></svg>Pinned conversations
         <span class="section-count" aria-hidden="true">{pinnedConversationAgents.length}</span>
       </h2>
-      {@render agentGrid(pinnedConversationAgents, false)}
+      {@render agentGrid(pinnedConversationAgents, false, undefined, undefined, 'conversation')}
     </section>
   {/if}
 
@@ -895,7 +1081,7 @@
         <svg class="section-pin-icon" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path></svg>Pinned
         <span class="section-count" aria-hidden="true">{pinnedTrees.length}</span>
       </h2>
-      {@render workspaceGrid(pinnedTrees, true, 'mixed')}
+      {@render workspaceGrid(pinnedTrees, true, 'mixed', true)}
     </section>
   {/if}
 
