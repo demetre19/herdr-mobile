@@ -29,6 +29,7 @@
     approvalPromptPreview,
     displayName,
     hostLabel,
+    tabName,
   } from '$lib/agents';
   import { APP_ASSET_VERSION, APP_BUILD_ID, APP_VERSION } from '$lib/config';
   import {
@@ -196,7 +197,7 @@
     if ($currentView.view === 'launch') return 'Start Agent';
     if ($currentView.view === 'activity') return 'Activity';
     if ($currentView.view === 'activity_detail') return 'Activity';
-    if (activeAgent) return activeAgent.project || displayName(activeAgent);
+    if (activeAgent) return tabName(activeAgent) || activeAgent.project || displayName(activeAgent);
     if ($currentView.view === 'terminal') return 'Terminal';
     return 'herdr';
   });
@@ -510,12 +511,14 @@
     else navigate({ view });
   }
 
+  // The tab name is the H1 now; meta carries the demoted context line:
+  // project dir, agent kind, host — skipping whatever the title already shows.
   function terminalSecondaryLabel(agent: Agent): string {
     const parts: string[] = [];
-    const context = agentContextLabel(agent);
+    const name = tabName(agent);
     const primary = agent.project || displayName(agent);
-    if (context) parts.push(context);
-    if (agent.agent && agent.agent !== primary && agent.agent !== context) parts.push(agent.agent);
+    if (primary && primary !== name) parts.push(primary);
+    if (agent.agent && agent.agent !== primary && agent.agent !== name) parts.push(agent.agent);
     const host = hostLabel(agent);
     if (host) {
       if (parts.length) parts[parts.length - 1] = `${parts[parts.length - 1]} @${host}`;

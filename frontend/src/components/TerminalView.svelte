@@ -588,6 +588,7 @@
     const nextTop = resetVirtualRows(stick ? Number.POSITIVE_INFINITY : element.scrollTop);
     void tick().then(() => {
       const stillStuck = virtualStickToBottom;
+      if (touchHeld) { virtualScrollResetPending = false; return; }
       element.scrollTop = stillStuck ? element.scrollHeight : nextTop;
       rememberVirtualScrollGeometry(element);
       if (stillStuck) virtualStickToBottom = true;
@@ -828,7 +829,12 @@
       return;
     }
     if (layoutChanged) terminalElement.scrollLeft = 0;
-    if (stick) {
+    if (touchHeld) {
+      // Finger owns the viewport: patch rows around the live position, never
+      // write scrollTop — a stick write here slammed the view to the bottom
+      // mid-drag.
+      renderVirtualWindow(terminalElement.scrollTop);
+    } else if (stick) {
       terminalElement.scrollTop = terminalElement.scrollHeight;
       jumpVisible = false;
       virtualStickToBottom = true;
@@ -1115,6 +1121,8 @@
       // Read the pin at apply time: an up-scroll can clear it between the
       // measure pass and this tick — honour the user's position, don't slam.
       const stillStuck = virtualStickToBottom;
+      // A held touch owns the viewport — never write scrollTop under a finger.
+      if (touchHeld) { virtualScrollResetPending = false; return; }
       terminalElement.scrollTop = stillStuck ? terminalElement.scrollHeight : nextTop;
       rememberVirtualScrollGeometry(terminalElement);
       virtualScrollResetPending = false;
@@ -1939,8 +1947,8 @@
         virtualScrollResetPending = false;
         return;
       }
+      if (touchHeld) { virtualScrollResetPending = false; return; }
       terminalElement.scrollTop = terminalElement.scrollHeight;
-      rememberVirtualScrollGeometry(terminalElement);
       virtualScrollResetPending = false;
       jumpVisible = false;
     });
@@ -2516,8 +2524,8 @@
     aria-label="Agent terminal output"
     onscroll={handleScroll}
     onpointerdown={() => { touchHeld = true; }}
-    onpointerup={() => { touchHeld = false; }}
-    onpointercancel={() => { touchHeld = false; }}
+    onpointerup={() => { touchHeld = false; if (terminalElement) { const gap = terminalElement.scrollHeight - terminalElement.scrollTop - terminalElement.clientHeight; virtualStickToBottom = gap < 48; jumpVisible = !virtualStickToBottom; } }}
+    onpointercancel={() => { touchHeld = false; if (terminalElement) { const gap = terminalElement.scrollHeight - terminalElement.scrollTop - terminalElement.clientHeight; virtualStickToBottom = gap < 48; jumpVisible = !virtualStickToBottom; } }}
     onscrollcapture={syncWideGridScroll}
     onclick={terminalSurfaceClick}
   >
