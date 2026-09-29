@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/0cv/herdr-mobile-relay/internal/localize"
+	"strings"
 	"time"
 
 	"github.com/0cv/herdr-mobile-relay/internal/transport"
@@ -182,9 +183,31 @@ func (s *Store) redeemInvitationLocked(selector transport.E2EEAuthSelector) (tra
 		Secret: secret,
 	}
 	record.PendingCredentialID = credentialID
+	// Re-pairing a device must yield one entry: revoke older credentials
+	// carrying the same device name. The fresh credential keeps the
+	// last-controller invariant satisfied, and revoked rows are filtered
+	// out of device_list, so the phone shows exactly one entry per name.
+	var revokedIndex []int
+	var revokedPrevious []credentialRecord
+	for index := range s.state.Credentials {
+		other := &s.state.Credentials[index]
+		if other.CredentialID == credentialID || other.Revoked {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(other.Name), strings.TrimSpace(record.Name)) {
+			revokedIndex = append(revokedIndex, index)
+			revokedPrevious = append(revokedPrevious, *other)
+			other.Revoked = true
+			other.Version++
+			other.Secret = ""
+		}
+	}
 	s.state.Credentials = append(s.state.Credentials, credential)
 	if err := s.persistLocked(); err != nil {
 		s.state.Credentials = s.state.Credentials[:len(s.state.Credentials)-1]
+		for i, index := range revokedIndex {
+			s.state.Credentials[index] = revokedPrevious[i]
+		}
 		record.PendingCredentialID = ""
 		clear(secretBytesValue)
 		return transport.E2EEAuthResult{}, fmt.Errorf("persist invitation redemption: %w", err)

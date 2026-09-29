@@ -374,3 +374,57 @@ func TestRearmedBootstrapRefreshesExpiryWithEnrolledDevices(t *testing.T) {
 		t.Fatal("refreshed re-armed bootstrap returned the wrong secret")
 	}
 }
+
+func TestRedeemInvitationRevokesSameNamedDevices(t *testing.T) {
+	store, err := Open(t.TempDir(), WithBootstrapReenrollment())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrapSecret := bytes.Repeat([]byte{3}, secretBytes)
+	// Two prior pairings of the same device name, as happens when the user
+	// re-runs `herdr-pair`: one already revoked, one still active.
+	store.state.Credentials = []credentialRecord{
+		testCredential("Mac-mini", "old-revoked", RoleController),
+		testCredential("Mac-mini", "old-active", RoleController),
+		testCredential("DESKTOP", "other-device", RoleController),
+	}
+	store.state.Credentials[0].Revoked = true
+	if err := store.EnsureBootstrapInvitation(bootstrapSecret, "Mac-mini", "en"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.CompleteE2EEAuth(context.Background(), transport.E2EEAuthSelector{
+		Kind: transport.E2EEAuthInvitation, ID: bootstrapInvitationID, Version: 1, Locale: "en",
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := 0
+	var sawOldActive, sawOther bool
+	for _, credential := range store.ListCredentials("") {
+		if credential.Revoked {
+			continue
+		}
+		active++
+		switch credential.CredentialID {
+		case "old-active":
+			sawOldActive = true
+		case "other-device":
+			sawOther = true
+		}
+	}
+	if sawOldActive {
+		t.Fatal("same-named credential stayed active after re-pair")
+	}
+	if !sawOther {
+		t.Fatal("differently-named credential was revoked")
+	}
+	if active != 2 {
+		t.Fatalf("active credentials = %d, want 2 (fresh Mac-mini + DESKTOP)", active)
+	}
+	if count := store.activeControllerCountLocked(); count < 1 {
+		t.Fatalf("active controllers = %d", count)
+	}
+	if got := store.state.Credentials[len(store.state.Credentials)-1].CredentialID; got != result.Identity.CredentialID {
+		t.Fatalf("new credential id = %q, want %q", got, result.Identity.CredentialID)
+	}
+}
