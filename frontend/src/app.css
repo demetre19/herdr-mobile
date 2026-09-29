@@ -487,9 +487,18 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .compact-agent-card .agent-path .path-symbol { display: none; }
 .compact-agent-card .agent-age { margin-inline-start: auto; order: 2; }
 .agent-tab-name { color: var(--foreground); flex: 0 1 auto; font-size: .9rem; font-weight: 700; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
+.agent-path-tail { color: var(--foreground); font-weight: 700; }
+/* OMP runtime identity: role reads warm, model reads cool — two distinct
+   colors at a glance. */
+.agent-chips { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .22rem; }
+.agent-chip { border-radius: .3rem; font-size: .62rem; font-weight: 700; letter-spacing: .02em; line-height: 1; padding: .18rem .4rem; text-transform: uppercase; }
+.agent-chip-role { background: color-mix(in srgb, #ff8a4c 16%, transparent); color: #ffb27d; }
+.agent-chip-model { background: color-mix(in srgb, #5ec6e8 14%, transparent); color: #8fdcf7; }
 .compact-agent-grid { gap: .28rem; }
 .compact-agent-card { background: color-mix(in srgb, var(--card) 78%, transparent); border-radius: .58rem; }
-.compact-agent-card .agent-open { align-items: center; padding: .54rem .68rem; }
+/* The absolutely-positioned pin needs a reserved lane, not a nudge: with full
+   right padding the age/title can never slide under it. */
+.compact-agent-card .agent-open { align-items: center; padding: .54rem 2.3rem .54rem .68rem; }
 .compact-agent-card .agent-identity { height: 1.25rem; width: 1.25rem; }
 .compact-agent-card .agent-logo { height: 1.18rem; width: 1.18rem; }
 .host-badge { color: var(--primary); font-size: .68rem; font-weight: 600; }

@@ -51,6 +51,10 @@ type AgentState struct {
 	InteractionID                string                 `json:"-"`
 	SessionID                    string                 `json:"-"`
 	ConversationHistoryAvailable bool                   `json:"conversation_history_available,omitempty"`
+	// OMP runtime identity, resolved by tailing the pane's session JSONL.
+	AgentRole                    string                 `json:"agent_role,omitempty"`
+	AgentModel                   string                 `json:"agent_model,omitempty"`
+	AgentEffort                  string                 `json:"agent_effort,omitempty"`
 	PaneRevision                 int                    `json:"-"`
 	StateRevision                int64                  `json:"pane_revision,omitempty"`
 	ScrollMaxOffset              int                    `json:"-"`

@@ -79,6 +79,13 @@ export function displayName(agent: Partial<Agent>): string {
   return String(agent.project || agent.name || agent.tab_label || agent.agent || 'agent');
 }
 
+// Chips keep the model readable at phone width: the provider prefix adds
+// noise a tile doesn't need ("devin/swe-2" → "swe-2").
+export function shortModelLabel(model: string): string {
+  const trimmed = String(model || '').trim();
+  return trimmed.split('/').pop() || trimmed;
+}
+
 export function agentUpdatedAt(agent: Partial<Agent> | null | undefined): number {
   const value = Number(agent?.updated_at);
   return Number.isFinite(value) ? value : 0;

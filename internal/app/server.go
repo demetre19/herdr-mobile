@@ -117,6 +117,8 @@ type Server struct {
 	appDeployM       *appdeploy.Manager
 	hybrid           *hybridTransport
 	uploadM          *upload.Manager
+	metaMu           sync.Mutex
+	metaCache        map[string]agentRuntimeMeta
 	deviceAuth       *deviceauth.Store
 	initErr          error
 
@@ -526,6 +528,15 @@ func (s *Server) resolveAgentSessionName(agent *coordinator.AgentState) {
 	// phone must echo it back for exact-target validation to ever pass.
 	agent.AgentSessionID = sessionID
 	agent.ConversationHistoryAvailable = sessionID != "" && conversation.Supported(agent.Agent)
+	// OMP panes carry their role/model/effort in the session JSONL; resolve it
+	// from the path while Session is still the path (SessionNameWithProject
+	// may overwrite it with a display title below).
+	if strings.HasSuffix(sessionID, ".jsonl") {
+		meta := s.resolveAgentRuntimeMeta(agent.Agent, agent.PaneID, sessionID)
+		agent.AgentRole = meta.role
+		agent.AgentModel = meta.model
+		agent.AgentEffort = meta.effort
+	}
 	if sessionID == "" {
 		return
 	}
@@ -1257,6 +1268,9 @@ func (s *Server) Run(ctx context.Context) error {
 				"project":        agent.Project,
 				"host":           agent.Host,
 				"session":        agent.Session,
+				"agent_role":     agent.AgentRole,
+				"agent_model":    agent.AgentModel,
+				"agent_effort":   agent.AgentEffort,
 				"session_name":   agent.SessionName,
 				"updated_at":     agent.UpdatedAt,
 				"event_id":       agent.BlockedEventID,
@@ -1972,6 +1986,9 @@ func (s *Server) broadcastBlockedAttention(agent *coordinator.AgentState) {
 		"command":              agent.Command,
 		"options":              agent.Options,
 		"approval_fingerprint": agent.ApprovalFingerprint,
+		"agent_role":           agent.AgentRole,
+		"agent_model":          agent.AgentModel,
+		"agent_effort":         agent.AgentEffort,
 		"interaction":          agent.Interaction,
 		"interaction_id":       agent.InteractionID,
 		"question_layout":      agent.QuestionLayout,
@@ -3816,6 +3833,9 @@ func applyAgentDelta(agent *coordinator.AgentState, delta map[string]any) {
 	setString("host", &agent.Host)
 	setString("session", &agent.Session)
 	setString("session_name", &agent.SessionName)
+	setString("agent_role", &agent.AgentRole)
+	setString("agent_model", &agent.AgentModel)
+	setString("agent_effort", &agent.AgentEffort)
 	if value, exists := delta["updated_at"]; exists {
 		switch v := value.(type) {
 		case float64:

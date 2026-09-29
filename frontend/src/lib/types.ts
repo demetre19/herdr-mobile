@@ -305,6 +305,9 @@ export interface Agent {
   generation?: number;
   agent_session_id?: string;
   conversation_history_available?: boolean;
+  agent_role?: string;
+  agent_model?: string;
+  agent_effort?: string;
   tab_id?: string;
   tab_label?: string;
   tab_number?: number;

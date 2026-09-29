@@ -15,6 +15,7 @@
     questionInteraction,
     sortedAgents,
     tabName,
+    shortModelLabel,
   } from '$lib/agents';
   import { homeLayout, persistWorkspaceDisclosure, pinnedConversations, pinnedWorkspaces, reorderPinnedConversations, reorderPinnedWorkspaces, togglePinnedConversation, togglePinnedWorkspace } from '$lib/preferences';
   import { relayStore } from '$lib/store';
@@ -848,13 +849,22 @@
                 {/if}
                 {#if agentPath}
                   <!-- Inside a workspace card the computer is named once, on
-                       the card, so the row spends its width on the directory. -->
-                  <span class="agent-path">{@render folderIcon()}<span>{agentPath}</span></span>
+                       the card, so the row spends its width on the directory.
+                       A .worktrees/ path shows its tail — the worktree name —
+                       in foreground white, everything else stays muted. -->
+                  {@const wt = agentPath.indexOf('/.worktrees/') >= 0 ? agentPath.indexOf('/.worktrees/') + '/.worktrees/'.length : -1}
+                  <span class="agent-path">{@render folderIcon()}<span>{#if wt >= 0}{agentPath.slice(0, wt)}<strong class="agent-path-tail">{agentPath.slice(wt)}</strong>{:else}{agentPath}{/if}</span></span>
                 {/if}
               {:else}
                 <span class="agent-project">{displayName(agent)} <span class="host-badge">@{hostLabel(agent)}</span></span>
               {/if}
             </span>
+            {#if compact && (agent.agent_role || agent.agent_model)}
+              <span class="agent-chips" aria-label={`${agent.agent_role || ''} ${agent.agent_model || ''}`.trim()}>
+                {#if agent.agent_role}<span class="agent-chip agent-chip-role">{agent.agent_role}</span>{/if}
+                {#if agent.agent_model}<span class="agent-chip agent-chip-model">{shortModelLabel(agent.agent_model)}{#if agent.agent_effort} · {agent.agent_effort}{/if}</span>{/if}
+              </span>
+            {/if}
             {#if !compact && meta}<span class="agent-meta">{meta}</span>{/if}
             {#if blocked || needsInspection}
               <span class="prompt-preview">{interaction?.question || approvalPromptPreview(agent)}</span>
