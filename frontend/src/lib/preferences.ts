@@ -7,6 +7,7 @@ import {
   APPEARANCES,
   DEFAULT_AGENT_VIEW_KEY,
   DEFAULT_DIRECTORY_KEY,
+  FAVORITE_AGENT_KEY,
   PANE_AGENT_VIEW_OVERRIDES_KEY,
   PINNED_CONVERSATIONS_KEY,
   PINNED_WORKSPACES_KEY,
@@ -584,5 +585,35 @@ export function setDefaultDirectory(relayId: string, path: string): 'saved' | 'u
     return 'unavailable';
   }
   defaultDirectories.set(next);
+  return 'saved';
+}
+
+// --- Favorite launch agent ---------------------------------------------------
+
+export function readFavoriteAgent(storage?: Pick<Storage, 'getItem'>): string {
+  try {
+    return (storage || localStorage).getItem(FAVORITE_AGENT_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export const favoriteAgentProfile = writable<string>(readFavoriteAgent());
+
+/**
+ * The pinned agent profile for Start Agent. Stored by profile id, which is
+ * stable across relays, so one favorite preselects on every computer that
+ * offers it. Clearing stores an empty string.
+ */
+export function setFavoriteAgent(profileId: string): 'saved' | 'unavailable' {
+  const value = profileId.trim();
+  if (get(favoriteAgentProfile) === value) return 'saved';
+  try {
+    if (value) localStorage.setItem(FAVORITE_AGENT_KEY, value);
+    else localStorage.removeItem(FAVORITE_AGENT_KEY);
+  } catch {
+    return 'unavailable';
+  }
+  favoriteAgentProfile.set(value);
   return 'saved';
 }

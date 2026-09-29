@@ -333,6 +333,10 @@
     const layoutDidNotScrollUp = wasPinned
       && listElement.scrollHeight >= lastScrollHeight
       && listElement.scrollTop >= lastScrollTop - 2;
+    // A shrunken window clamps scrollTop to the new bottom — that landing is
+    // the clamp, not the reader scrolling down, so it must not re-pin the view
+    // and let the next page slam the position back to the end.
+    const shrank = listElement.scrollHeight < lastScrollHeight - 1;
     lastScrollTop = listElement.scrollTop;
     lastScrollHeight = listElement.scrollHeight;
     const layoutShiftFromPin = pinPendingUntil > Date.now()
@@ -343,7 +347,7 @@
       return;
     }
     pinPendingUntil = 0;
-    pinnedToBottom = bottomGap < 48;
+    pinnedToBottom = bottomGap < 48 && !(shrank && !wasPinned);
     if (query.trim() || !historyController || document.visibilityState === 'hidden' || $securityState.locked) return;
     const nearTop = listElement.scrollTop <= 300;
     if (!pinnedToBottom && nearTop) demandOlder();
@@ -353,7 +357,13 @@
   }
 
   function applyHistoryState(next: ConversationHistoryControllerState): void {
-    const oldEntries = entries;
+    // Reading position is an anchor on the top visible row, captured before
+    // the new entry set lands. Any shape change — prepend, window swap,
+    // preview promotion — then restores the same row at the same offset
+    // instead of trusting the old scrollTop against new content.
+    const restore = (!pinnedToBottom && listElement)
+      ? { anchor: topVisibleEntry(), top: listElement.scrollTop, height: listElement.scrollHeight }
+      : null;
     entries = next.entries;
     available = next.available;
     reason = next.reason;
@@ -382,11 +392,8 @@
     loadingOlder = next.requestPhase === 'older';
     loading = !entries.length && !previewVisible && next.requestPhase === 'initial';
 
-    const prepended = oldEntries.length > 0
-      && next.entries.findIndex((entry) => entry.id === oldEntries[0].id) > 0;
-    if (prepended && pendingAnchor) {
-      const anchor = pendingAnchor;
-      void tick().then(() => restoreScrollAnchor(anchor.anchor, anchor.top, anchor.height));
+    if (restore) {
+      void tick().then(() => restoreScrollAnchor(restore.anchor, restore.top, restore.height));
     }
     if (next.requestPhase === 'idle') pendingAnchor = null;
   }

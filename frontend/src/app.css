@@ -425,6 +425,12 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .app-select-option.active { background: var(--card-hover); }
 .app-select-option[aria-selected='true'] { color: var(--primary); font-weight: 600; }
 .app-select-check { flex: 0 0 auto; height: .95rem; margin-inline-start: .6rem; width: .95rem; }
+
+.app-select-option-label { align-items: center; display: inline-flex; gap: .4rem; min-width: 0; }
+.app-select-option-pin { color: var(--primary); flex: 0 0 auto; height: .8rem; width: .8rem; }
+.app-select-pin { align-items: center; background: none; border: none; border-radius: .3rem; color: var(--muted); cursor: pointer; display: inline-flex; flex: 0 0 auto; justify-content: center; margin-inline-start: .35rem; min-height: 1.8rem; min-width: 1.8rem; padding: .2rem; }
+.app-select-pin svg { height: .85rem; width: .85rem; }
+.app-select-pin.pinned, .app-select-pin.pinned:hover { color: var(--primary); }
 .app-select-empty { color: var(--muted); cursor: default; }
 .form-actions, .dialog-actions { display: grid; gap: .5rem; grid-template-columns: 1fr 1fr; margin-top: .35rem; }
 .app-update-status { position: relative; }
@@ -475,8 +481,9 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .path-row > span, .agent-path > span { min-width: 0; overflow-wrap: anywhere; }
 .path-symbol { align-self: center; flex: 0 0 auto; height: .85em; stroke: var(--muted); width: .85em; }
 .agent-path { color: var(--muted); flex: 1; font-size: .78rem; font-weight: 600; }
-.agent-title-row .agent-path { align-self: flex-start; flex: 1 1 12rem; margin-top: 0; }
-.agent-tab-name { color: var(--foreground); flex: 0 1 auto; font-size: .9rem; font-weight: 700; max-width: 55%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-title-row .agent-path { align-self: flex-start; flex: 1 1 100%; margin-top: 0; order: 3; }
+.compact-agent-card .agent-age { margin-inline-start: auto; order: 2; }
+.agent-tab-name { color: var(--foreground); flex: 0 1 auto; font-size: .9rem; font-weight: 700; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
 .compact-agent-grid { gap: .28rem; }
 .compact-agent-card { background: color-mix(in srgb, var(--card) 78%, transparent); border-radius: .58rem; }
 .compact-agent-card .agent-open { align-items: center; padding: .54rem .68rem; }
@@ -1036,6 +1043,13 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .agent-pin { align-items: center; background: none; border: none; border-radius: .35rem; color: var(--muted); cursor: pointer; display: inline-flex; justify-content: center; min-height: 1.9rem; min-width: 1.9rem; padding: .25rem; position: absolute; right: .3rem; top: .3rem; z-index: 2; }
 .agent-pin svg { height: .9rem; width: .9rem; }
 .agent-pin:hover { color: var(--text); }
+
+/* A workspace reduced to one tab renders flat: the card is the tab. */
+.solo-workspace-card { position: relative; }
+.solo-workspace-card > .compact-agent-grid { padding: .45rem; }
+.solo-workspace-card .compact-agent-card { background: transparent; }
+.solo-workspace-pin { position: absolute; right: .3rem; top: .3rem; z-index: 2; }
+.solo-workspace-card .compact-agent-card .agent-open { padding-inline-end: 2.2rem; }
 .agent-pin.pinned, .agent-pin.pinned:hover { color: #ff8a4c; }
 .done-workspace-card { border-color: color-mix(in srgb, var(--success) 42%, var(--border)); }
 .workspace-state-dot { margin-inline-start: -.1rem; }

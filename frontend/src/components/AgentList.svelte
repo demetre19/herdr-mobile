@@ -257,6 +257,10 @@
     workspace: WorkspaceGroup;
     tab?: WorkspaceTab;
   }
+  // A workspace reduced to a single tab IS the tab: holding it closes both,
+  // so every close gesture on it resolves to the workspace.
+  const closeKindFor = (workspace: WorkspaceGroup): 'workspace' | 'tab' =>
+    workspace.tabs.length <= 1 ? 'workspace' : 'tab';
   let closeTarget = $state<CloseTarget | null>(null);
   let closeDialogOpen = $state(false);
   let closeBusy = $state(false);
@@ -412,7 +416,7 @@
           if (current.tab) {
             suppressOpen = true;
             navigator.vibrate?.(12);
-            closeTarget = { kind: 'tab', workspace, tab: current.tab };
+            closeTarget = { kind: closeKindFor(workspace), workspace, tab: current.tab };
             closeDialogOpen = true;
           }
           return;
@@ -585,6 +589,8 @@
       startY = event.clientY;
       timer = window.setTimeout(() => {
         timer = 0;
+        // The close gesture may have claimed this hold after pointerdown.
+        if (closeTarget || closeBusy) return reset();
         const kind = current.kind;
         if (!kind) return reset();
         const items = measurePinSlots(node, kind);
@@ -802,7 +808,7 @@
   <small class="path-row">{@render folderIcon()}<span>{path}</span></small>
 {/snippet}
 
-{#snippet agentGrid(visible: Agent[], compact: boolean, workspace?: WorkspaceGroup, tab?: WorkspaceTab, pinKind?: 'conversation')}
+{#snippet agentGrid(visible: Agent[], compact: boolean, workspace?: WorkspaceGroup, tab?: WorkspaceTab, pinKind?: 'conversation', suppressPin = false)}
   {@const reorderable = Boolean(workspace && workspace.tabs.length > 1 && tabOrderingAvailable(workspace))}
   <div class:compact-agent-grid={compact} class="agent-grid">
     {#each visible as agent (agent.pane_id)}
@@ -837,6 +843,9 @@
             <span class="agent-title-row">
               {#if compact}
                 <span class="agent-tab-name">{tabName(agent) || displayName(agent)}</span>
+                {#if age}
+                  <time class="agent-age" datetime={new Date(agentLastActiveAt(agent)).toISOString()} title={new Date(agentLastActiveAt(agent)).toLocaleString()}>{age}</time>
+                {/if}
                 {#if agentPath}
                   <!-- Inside a workspace card the computer is named once, on
                        the card, so the row spends its width on the directory. -->
@@ -845,9 +854,6 @@
               {:else}
                 <span class="agent-project">{displayName(agent)} <span class="host-badge">@{hostLabel(agent)}</span></span>
               {/if}
-              {#if compact && age}
-                <time class="agent-age" datetime={new Date(agentLastActiveAt(agent)).toISOString()} title={new Date(agentLastActiveAt(agent)).toLocaleString()}>{age}</time>
-              {/if}
             </span>
             {#if !compact && meta}<span class="agent-meta">{meta}</span>{/if}
             {#if blocked || needsInspection}
@@ -855,6 +861,7 @@
             {/if}
           </span>
         </button>
+        {#if !suppressPin}
         <button
           type="button"
           class="agent-pin"
@@ -868,6 +875,7 @@
             <path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path>
           </svg>
         </button>
+        {/if}
         {#if blocked && !responding.has(agent.pane_id)}
           <div class="agent-actions" aria-label={`Actions for ${displayName(agent)}`}>
             {#if interaction}
@@ -903,7 +911,7 @@
         data-tab-id={tab.id}
         aria-label={`${tab.label} tab`}
         style:transform={tabShift(workspace, tab.id) || undefined}
-        use:closePress={{ kind: 'tab', workspace, tab }}
+        use:closePress={{ kind: closeKindFor(workspace), workspace, tab }}
       >
         {@render agentGrid(tab.agents, true, workspace, tab)}
       </section>
@@ -929,6 +937,41 @@
       {@const openDefault = kind === 'mixed'
         ? defaultOpen || summary.workingCount > 0 || summary.doneCount > 0
         : defaultOpen}
+      {@const solo = workspace.tabs.length === 1 && !tree.children.length}
+      {#if solo}
+        <!-- One tab is the workspace: render the tab's agents flat, with the
+             workspace's pin and close gestures on the card itself. -->
+        <article
+          class:working-workspace-card={working}
+          class:done-workspace-card={done}
+          class:pin-dragging={pinnedList && pinDrag?.kind === 'workspace' && pinDrag.sourceKey === workspace.key}
+          class="workspace-card solo-workspace-card"
+          data-pin-key={pinnedList ? workspace.key : undefined}
+          style:transform={pinnedList ? pinShift(workspace.key) || undefined : undefined}
+          use:pinPress={{ kind: pinnedList ? 'workspace' : undefined, key: workspace.key }}
+          use:closePress={{ kind: 'workspace', workspace }}
+          aria-label={`${workspace.label} workspace`}
+        >
+          {@render agentGrid(workspace.tabs[0].agents, true, workspace, workspace.tabs[0], undefined, true)}
+          <button
+            type="button"
+            class="workspace-pin solo-workspace-pin"
+            class:pinned={pinnedKeys.has(workspace.key)}
+            aria-pressed={pinnedKeys.has(workspace.key)}
+            aria-label={pinnedKeys.has(workspace.key) ? `Unpin ${workspace.label}` : `Pin ${workspace.label}`}
+            title={pinnedKeys.has(workspace.key) ? 'Unpin workspace' : 'Pin workspace to top'}
+            onclick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              togglePinnedWorkspace(workspace.key);
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill={pinnedKeys.has(workspace.key) ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path>
+            </svg>
+          </button>
+        </article>
+      {:else}
       <details
         class:working-workspace-card={working}
         class:done-workspace-card={done}
@@ -1014,6 +1057,7 @@
           </div>
         {/if}
       </details>
+      {/if}
     {/each}
   </div>
 {/snippet}

@@ -143,7 +143,7 @@
   let displayed = $state('');
   let renderedHtml = $state('');
   let renderedRows = $state<RenderedTerminalRow[]>([]);
-  let virtualHtml = $state('');
+  let virtualRows = $state<{ index: number; html: string }[]>([]);
   let virtualTopHeight = $state(0);
   let virtualBottomHeight = $state(0);
   let virtualContentColumns = $state(0);
@@ -156,10 +156,14 @@
   let pendingResizeStick: boolean | null = null;
   let pendingLayoutStick: boolean | null = null;
   let virtualScrollTop = 0;
+  let virtualScrollHeight = 0;
   let virtualClientHeight = 0;
   let virtualWindowFrame = 0;
   let virtualRowObserver: ResizeObserver | undefined;
   let virtualHeightCache = new Map<string, number>();
+  // A finger dragging the log freezes viewport correction: frames still patch
+  // rows but nothing rewrites scrollTop out from under the touch.
+  let touchHeld = false;
   const virtualIndex = new VirtualTerminalIndex();
   const wideGridOffsets = new Map<number, number>();
   let wideGridOffsetsPane = '';
@@ -422,7 +426,7 @@
       findOpen,
       findQuery,
       activeFindIndex,
-      virtualHtml,
+      virtualRows,
       terminalFind.matches.length,
     ];
     void highlightState;
@@ -489,6 +493,11 @@
           pendingResizeStick = null;
           pendingResizeAnchor = null;
         }
+        // Once anything has painted, a transient gap never blanks the pane:
+        // background tab spawns and lease renegotiations swap the frame out
+        // for a beat, and replacing real output with a placeholder is what
+        // read as flicker and ate the reader's scroll position.
+        if (renderedRows.length) return;
         const message = waitingForResizedFrame ? 'Resizing terminal…' : 'Loading…';
         const rendered = renderTerminalContent(message, 'plain');
         displayed = rendered.display;
@@ -555,19 +564,21 @@
     paneSizeLeaseError = '';
     void tick().then(() => requestPaneSizeLease(false));
   });
-
   $effect.pre(() => {
     const interfaceSizeValue = $interfaceSize;
     void interfaceSizeValue;
     if (!terminalElement) return;
-    virtualStickToBottom = terminalElement.scrollHeight
-      - terminalElement.scrollTop
-      - terminalElement.clientHeight < 48;
+    // Stickiness is intent, not geometry. A content collapse clamps scrollTop
+    // onto a position that only LOOKS like the bottom — re-deriving the flag
+    // here re-armed the pin and the next frame slammed the view back to the
+    // end. handleScroll owns the flag; this only snapshots it for the layout
+    // change in flight.
     pendingLayoutStick = virtualStickToBottom;
   });
 
   function rememberVirtualScrollGeometry(element: HTMLElement) {
     virtualScrollTop = element.scrollTop;
+    virtualScrollHeight = element.scrollHeight;
     virtualClientHeight = element.clientHeight;
   }
 
@@ -861,11 +872,13 @@
     };
   }
 
-  function matchingAnchorIndex(anchor: VirtualTerminalAnchor): number {
-    const fallback = Math.min(anchor.index, Math.max(0, renderedRows.length - 1));
+  // null = no trustworthy match: the caller holds the current scrollTop rather
+  // than snapping to the anchor's stale index (that snap is what threw the
+  // viewport to the top when the anchor row was a blank or a redrawn line).
+  function matchingAnchorIndex(anchor: VirtualTerminalAnchor): number | null {
     const target = anchor.text.trim();
-    if (target.length < 4) return fallback;
-    let bestIndex = fallback;
+    if (target.length < 4) return null;
+    let bestIndex = -1;
     let bestScore = 0;
     let bestDistance = Number.POSITIVE_INFINITY;
     for (let index = 0; index < renderedRows.length; index += 1) {
@@ -880,7 +893,7 @@
         bestDistance = distance;
       }
     }
-    return bestIndex;
+    return bestIndex >= 0 ? bestIndex : null;
   }
 
   function anchorOffsetLimit(anchor: VirtualTerminalAnchor, anchorIndex: number): number {
@@ -946,13 +959,18 @@
     });
     virtualIndex.reset(sizes);
     let nextTop = scrollTop;
-    if (previousAnchor && virtualIndex.length) {
+    // A finger on the glass freezes the view where the touch is: frame applies
+    // keep patching rows but never move the viewport out from under it. A
+    // failed anchor match does the same — better a held pixel than a guess.
+    if (previousAnchor && virtualIndex.length && !touchHeld) {
       const anchorIndex = matchingAnchorIndex(previousAnchor);
-      const anchorOffset = Math.min(
-        Math.max(0, previousAnchor.offset),
-        anchorOffsetLimit(previousAnchor, anchorIndex),
-      );
-      nextTop = terminalScreenOffset() + virtualIndex.offset(anchorIndex) + anchorOffset;
+      if (anchorIndex !== null) {
+        const anchorOffset = Math.min(
+          Math.max(0, previousAnchor.offset),
+          anchorOffsetLimit(previousAnchor, anchorIndex),
+        );
+        nextTop = terminalScreenOffset() + virtualIndex.offset(anchorIndex) + anchorOffset;
+      }
     }
 
     if (!lastPreserveLayout || resizeLayoutPending) virtualContentColumns = 0;
@@ -967,15 +985,19 @@
     return nextTop;
   }
 
-  function mountedVirtualHtml(start: number, end: number): string {
-    let html = '';
+  // Each row renders through a keyed each so a new frame patches changed rows
+  // in place instead of re-creating the whole window. That keeps an in-flight
+  // text selection alive and stops the full-viewport repaint flicker on every
+  // delta frame.
+  function mountedVirtualRows(start: number, end: number): { index: number; html: string }[] {
+    const rows: { index: number; html: string }[] = [];
     for (let index = start; index < end; index += 1) {
       const attributes = renderedRows[index].wideGrid && wideGridBlocks[index] >= 0
         ? `<span data-terminal-row="${index}" data-terminal-wide-block="${wideGridBlocks[index]}" `
         : `<span data-terminal-row="${index}" `;
-      html += renderedRows[index].html.replace('<span ', attributes);
+      rows.push({ index, html: renderedRows[index].html.replace('<span ', attributes) });
     }
-    return html;
+    return rows;
   }
 
   // Contiguous wide box-drawn rows form one logical table. Their borders were
@@ -1034,7 +1056,7 @@
     virtualTopHeight = range.top;
     virtualBottomHeight = range.bottom;
     if (force || !unchanged) {
-      virtualHtml = mountedVirtualHtml(range.start, range.end);
+      virtualRows = mountedVirtualRows(range.start, range.end);
       queueVirtualRowObservation();
     }
   }
@@ -1952,10 +1974,21 @@
     // row heights disagree with the estimates more than Chromium's — opened
     // a growing gap above the transcript's end and fought every scroll with
     // anchor-preserving corrections (issue #11's missing bottom + flicker).
+    // A shrinking frame (a viewport-only refresh, a transient empty frame)
+    // makes the browser clamp scrollTop down to the new maximum and fire a
+    // scroll event that lands exactly at the shrunken bottom. That is the
+    // clamp moving the viewport, not the reader — it must not re-arm the pin,
+    // or the restored full content slams the view back to the end.
+    const shrinkClamp = scrollHeight < virtualScrollHeight - 1;
     const movedTowardHistory = !layoutChanged
       && scrollTop < virtualScrollTop - 1
       && bottomDistance > 1;
     rememberVirtualScrollGeometry(terminalElement);
+    if (shrinkClamp && !movedTowardHistory) {
+      jumpVisible = !virtualStickToBottom;
+      scheduleVirtualWindow();
+      return;
+    }
     if (movedTowardHistory) {
       virtualStickToBottom = false;
       jumpVisible = true;
@@ -2482,6 +2515,9 @@
     role="log"
     aria-label="Agent terminal output"
     onscroll={handleScroll}
+    onpointerdown={() => { touchHeld = true; }}
+    onpointerup={() => { touchHeld = false; }}
+    onpointercancel={() => { touchHeld = false; }}
     onscrollcapture={syncWideGridScroll}
     onclick={terminalSurfaceClick}
   >
@@ -2494,8 +2530,12 @@
       {#if virtualTopHeight > 0}
         <span class="terminal-virtual-spacer" style={`height:${virtualTopHeight}px`} aria-hidden="true"></span>
       {/if}
-      <!-- Normalized rows are escaped before controlled ANSI spans enter this bounded DOM window. -->
-      {@html virtualHtml}
+      <!-- Normalized rows are escaped before controlled ANSI spans enter this
+           bounded DOM window. Keyed by index so a new frame patches rows in
+           place: text selection, node identity, and scroll position survive. -->
+      {#each virtualRows as row (row.index)}
+        {@html row.html}
+      {/each}
       {#if virtualBottomHeight > 0}
         <span class="terminal-virtual-spacer" style={`height:${virtualBottomHeight}px`} aria-hidden="true"></span>
       {/if}

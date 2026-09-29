@@ -14,6 +14,9 @@
     placeholder?: string;
     'aria-label'?: string;
     onchange?: (value: string) => void;
+    /** When set with onpin, each option shows a pin toggle that never selects it. */
+    pinnedValue?: string;
+    onpin?: (value: string) => void;
   };
 
   let {
@@ -22,6 +25,8 @@
     value = $bindable(''),
     disabled = false,
     placeholder = 'Select…',
+    pinnedValue = '',
+    onpin,
     onchange,
     ...rest
   }: Props = $props();
@@ -97,6 +102,7 @@
   {#if open}
     <ul class="app-select-list" role="listbox" aria-label={rest['aria-label']} tabindex="-1">
       {#each options as option, index (option.value)}
+        {@const optionPinned = pinnedValue === option.value}
         <li
           role="option"
           aria-selected={option.value === value}
@@ -105,7 +111,26 @@
           onpointerdown={(event) => { event.preventDefault(); choose(option); }}
           onpointerenter={() => { activeIndex = index; }}
         >
-          <span>{option.label}</span>
+          <span class="app-select-option-label">
+            {option.label}
+            {#if optionPinned}
+              <svg class="app-select-option-pin" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path></svg>
+            {/if}
+          </span>
+          {#if onpin}
+            <button
+              type="button"
+              class="app-select-pin"
+              class:pinned={optionPinned}
+              aria-pressed={optionPinned}
+              aria-label={optionPinned ? `Unpin ${option.label}` : `Pin ${option.label} as favorite`}
+              title={optionPinned ? 'Unpin favorite' : 'Pin as favorite'}
+              onpointerdown={(event) => event.stopPropagation()}
+              onclick={(event) => { event.stopPropagation(); onpin(option.value); }}
+            >
+              <svg viewBox="0 0 24 24" fill={optionPinned ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path></svg>
+            </button>
+          {/if}
           {#if option.value === value}
             <svg class="app-select-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m5 13 4 4L19 7"></path></svg>
           {/if}

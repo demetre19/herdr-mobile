@@ -93,12 +93,48 @@
   let viewedRelayId = '';
   let viewedTargetSignature = '';
 
+  // The route's target is launch-time intent; the pane id is the identity.
+  // Roster churn (a tab spawning next door, a generation bump, a re-announced
+  // session) must not null the agent — that unmounts the whole view and eats
+  // the reader's scroll position. A vanished pane keeps its last record for a
+  // grace window; the expiry tick bumps a version counter so the derived only
+  // reads state, never writes it.
+  let stickyAgent: Agent | null = null;
+  let stickyPaneId = '';
+  let paneGraceExpired = false;
+  let paneGraceVersion = $state(0);
+  let paneGraceTimer: ReturnType<typeof setTimeout> | null = null;
   const activeAgent = $derived.by(() => {
+    void paneGraceVersion;
     const view = $currentView;
-    if (view.view !== 'terminal' && view.view !== 'history') return null;
+    if (view.view !== 'terminal' && view.view !== 'history') {
+      stickyAgent = null;
+      stickyPaneId = '';
+      paneGraceExpired = false;
+      if (paneGraceTimer) { clearTimeout(paneGraceTimer); paneGraceTimer = null; }
+      return null;
+    }
+    if (stickyPaneId !== view.paneId) {
+      stickyAgent = null;
+      stickyPaneId = view.paneId || '';
+      paneGraceExpired = false;
+      if (paneGraceTimer) { clearTimeout(paneGraceTimer); paneGraceTimer = null; }
+    }
     const agent = $agents.find((candidate) => candidate.pane_id === view.paneId) || null;
-    if (!agent || !view.target) return agent;
-    return targetRefMatchesAgent(view.target, agent) ? agent : null;
+    if (agent) {
+      stickyAgent = agent;
+      paneGraceExpired = false;
+      if (paneGraceTimer) { clearTimeout(paneGraceTimer); paneGraceTimer = null; }
+      return agent;
+    }
+    if (stickyAgent && !paneGraceExpired && !paneGraceTimer) {
+      paneGraceTimer = setTimeout(() => {
+        paneGraceTimer = null;
+        paneGraceExpired = true;
+        paneGraceVersion += 1;
+      }, 6_000);
+    }
+    return paneGraceExpired ? null : stickyAgent;
   });
   const activeReadOnly = $derived(Boolean(
     activeAgent && relayStore.deviceCredential(activeAgent.relay_id)?.role === 'reader',
@@ -742,7 +778,7 @@
       <p role="alert">This agent is not available.</p>
       <Button onclick={() => replaceView({ view: 'agents' })}>Back to agents</Button>
     </main>
-  {:else if $currentView.view === 'terminal' && activeAgent && activeConnection?.status === 'connected' && activeConnection.inventory.state !== 'ready'}
+  {:else if $currentView.view === 'terminal' && activeAgent && activeConnection?.status === 'connected' && activeConnection.inventory.state !== 'ready' && !$frames.has(activeAgent.pane_id)}
     <main class="page terminal-loading" aria-label="Agent inventory unavailable">
       <p role="alert">{activeConnection.inventory.message || 'This computer’s Herdr agent inventory is not ready.'}</p>
       <Button onclick={() => replaceView({ view: 'agents' })}>Back to agents</Button>

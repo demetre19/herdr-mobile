@@ -25,6 +25,7 @@ export const PINNED_WORKSPACES_KEY = 'herdr_pinned_workspaces';
 export const PINNED_CONVERSATIONS_KEY = 'herdr_pinned_conversations';
 export const WORKSPACE_DISCLOSURE_KEY = 'herdr_workspace_disclosure';
 export const DEFAULT_DIRECTORY_KEY = 'herdr_default_directory';
+export const FAVORITE_AGENT_KEY = 'herdr_favorite_agent';
 export const APPEARANCE_KEY = 'herdr_appearance';
 export const ACCENT_KEY = 'herdr_accent';
 export const ACCENT_CUSTOM_KEY = 'herdr_accent_custom';

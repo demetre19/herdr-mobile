@@ -6,7 +6,7 @@
   import { agentOpeningView } from '$lib/agent-view';
   import Card from '$components/ui/Card.svelte';
   import { suggestedLaunchName } from '$lib/launch';
-  import { defaultAgentView, defaultDirectories, paneAgentViewOverrides, setDefaultDirectory } from '$lib/preferences';
+  import { defaultAgentView, defaultDirectories, paneAgentViewOverrides, setDefaultDirectory, favoriteAgentProfile, setFavoriteAgent } from '$lib/preferences';
   import { targetRefForAgent } from '$lib/resource-id';
   import { replaceView } from '$lib/router';
   import { relayStore } from '$lib/store';
@@ -63,6 +63,10 @@
     return entries.filter((entry) => entry.name.toLowerCase().includes(query));
   });
   const profiles = $derived(connection?.agentProfiles || []);
+  // A pinned favorite floats to the top of the list as well as preselecting.
+  const profileOptions = $derived(profiles
+    .map((profile) => ({ value: profile.id, label: profile.label || profile.id }))
+    .sort((a, b) => (a.value === $favoriteAgentProfile ? -1 : b.value === $favoriteAgentProfile ? 1 : 0)));
   const targetWorkspace = $derived(
     $workspaces.find((workspace) => (
       workspace.relay_id === relayId && workspace.workspace_id === workspaceId
@@ -80,7 +84,12 @@
         ? requestedRelayId
         : connectedRelays[0]?.id || '';
     }
-    if (!profiles.some((profile) => profile.id === profileId)) profileId = profiles[0]?.id || '';
+    const favorite = $favoriteAgentProfile;
+    if (!profiles.some((profile) => profile.id === profileId)) {
+      profileId = (favorite && profiles.some((profile) => profile.id === favorite))
+        ? favorite
+        : profiles[0]?.id || '';
+    }
     if (relayId && relayId !== loadedRelay) {
       loadedRelay = relayId;
       directoryRelayId = '';
@@ -218,10 +227,12 @@
       <label for="launch-profile">Agent</label>
       <AppSelect
         id="launch-profile"
-        options={profiles.map((profile) => ({ value: profile.id, label: profile.label || profile.id }))}
+        options={profileOptions}
         bind:value={profileId}
         placeholder={profiles.length ? 'Select an agent' : 'No agent profiles available'}
         aria-label="Agent"
+        pinnedValue={$favoriteAgentProfile}
+        onpin={(id) => { setFavoriteAgent(id === $favoriteAgentProfile ? '' : id); }}
         onchange={updateName}
       />
 
