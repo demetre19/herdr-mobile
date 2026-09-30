@@ -1310,6 +1310,9 @@ body[data-view='history'] .header-title > span { align-self: flex-start; font-si
 :root[data-interface-size='large'] body[data-view='terminal'] .header-title > span,
 :root[data-interface-size='regular'] body[data-view='history'] .header-title > span,
 :root[data-interface-size='large'] body[data-view='history'] .header-title > span { align-self: center; text-align: center; }
+:root[data-interface-size='regular'] body[data-view='terminal'] .header-title > span,
+:root[data-interface-size='large'] body[data-view='terminal'] .header-title > span { margin-bottom: .18rem; }
+
 
 :root[data-interface-size='regular'] body[data-view='terminal'] .header-row-top,
 :root[data-interface-size='large'] body[data-view='terminal'] .header-row-top {
@@ -1341,7 +1344,7 @@ body[data-view='history'] .header-title > span { align-self: flex-start; font-si
   border-top: 1px solid color-mix(in srgb, var(--foreground) 7%, transparent);
   margin-left: -.65rem;
   margin-right: -.65rem;
-  padding: .12rem .65rem .1rem;
+  padding: .12rem .65rem .32rem;
 }
 /* Compact keeps the single right-aligned line (base `margin-left: auto` on
    the nav); the buttons shrink so the lone row stays slim. */
