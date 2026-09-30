@@ -522,12 +522,22 @@
   }
 
   async function copyMarkdown(entry: ConversationEntry) {
-    if (!entry.text || !navigator.clipboard?.writeText) {
+    if (!navigator.clipboard?.writeText) {
       relayStore.showToast('Clipboard access is unavailable. Select the text manually.', true);
       return;
     }
+    // The stream's entry.text is whatever survived the browse page budget —
+    // long turns arrive halved. Ask the relay for the full entry by its
+    // stable row id; fall back to the clipped text when the fetch fails.
+    let text = entry.text;
     try {
-      await navigator.clipboard.writeText(entry.text);
+      const full = await relayStore.conversationEntry(agent.relay_id, agent.raw_pane_id, entry.id);
+      if (full) text = full;
+    } catch {
+      // clipped fallback below
+    }
+    try {
+      await navigator.clipboard.writeText(text);
       relayStore.showToast('Markdown copied.');
     } catch {
       relayStore.showToast('Could not copy. Select it manually.', true);

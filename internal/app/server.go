@@ -788,6 +788,8 @@ func (s *Server) Run(ctx context.Context) error {
 			s.handlePaneApplied(client, msg)
 		case "get_conversation_history":
 			s.handleConversationHistory(client, inbound)
+		case "conversation_entry":
+			s.handleConversationEntry(client, inbound)
 		case "device_list":
 			identity, authenticated := client.Identity()
 			if s.deviceAuth == nil || !authenticated {
@@ -2184,6 +2186,53 @@ func (s *Server) handleConversationHistory(client *transport.ClientConn, inbound
 		return
 	}
 	s.sendCommandResult(client, inbound.RequestID, action, true, "completed", "", inbound.PaneID, page)
+}
+
+// conversation_entry returns one full, untruncated entry by stable row id so
+// the phone can copy the complete message instead of whatever fragment the
+// page budget left in the browse response.
+func (s *Server) handleConversationEntry(client *transport.ClientConn, inbound protocol.Inbound) {
+	action := "conversation_entry"
+	fail := func(message, code string) {
+		s.sendCommandResult(client, inbound.RequestID, action, false, "failed", message, inbound.PaneID, map[string]any{"error_code": code})
+	}
+	entryID := strings.TrimSpace(inbound.EntryID)
+	if entryID == "" {
+		fail("Entry id is required", "entry_id_required")
+		return
+	}
+	agent, exists := s.state.Agent(inbound.PaneID)
+	if !exists {
+		fail("Agent is unavailable", "agent_unavailable")
+		return
+	}
+	reader := s.conversationM
+	if reader == nil || !conversation.Supported(agent.Agent) {
+		fail("Conversation history is not available for this agent", "history_unavailable")
+		return
+	}
+	project := projectContextForAgent(agent)
+	page, err := reader.ReadWithProject(agent.Agent, project, agent.SessionID, "", 0)
+	if err != nil {
+		s.logger.Warn("conversation entry read failed", "pane_id", inbound.PaneID, "error", err)
+		fail("Conversation entry could not be read", "history_unreadable")
+		return
+	}
+	if !page.Available {
+		fail("Conversation history is not available", "history_unavailable")
+		return
+	}
+	for _, entry := range page.Entries {
+		// Browse pages may namespace ids (e.g. Claude chain segments as
+		// "seg-<sha24>"); the "-" separator keeps a partial-sha collision out.
+		if entry.ID == entryID || strings.HasSuffix(entryID, "-"+entry.ID) {
+			s.sendCommandResult(client, inbound.RequestID, action, true, "completed", "", inbound.PaneID, map[string]any{
+				"entry_id": entry.ID, "role": entry.Role, "text": entry.Text,
+			})
+			return
+		}
+	}
+	fail("Entry not found", "entry_not_found")
 }
 
 // Conversation logs preserve the full assistant message; the terminal pane is

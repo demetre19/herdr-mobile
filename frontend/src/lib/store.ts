@@ -1970,6 +1970,19 @@ class RelayStore {
   }
 
   /**
+   * Fetch one full conversation entry by stable row id — used by the copy
+   * button so a long message lands on the clipboard whole, not as the
+   * fragment the browse page budget left over.
+   */
+  async conversationEntry(relayId: string, paneId: string, entryId: string): Promise<string | null> {
+    const result = await this.sendCommand(relayId, {
+      type: 'conversation_entry', pane_id: paneId, entry_id: entryId,
+    });
+    const text = result.data?.text;
+    return typeof text === 'string' ? text : null;
+  }
+
+  /**
    * Answers the question the phone would otherwise spend a reconnect ladder on:
    * once this browser's own credential is gone, an invitation-paired relay has
    * nothing left to present, so say so now instead of retrying in the dark.
