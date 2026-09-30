@@ -90,19 +90,32 @@ export function shortModelLabel(model: string): string {
  * Start offset of the white "worktree tail" span in an agent's display path,
  * or -1 when the path is not inside a worktree checkout.
  *
- * `.worktrees/<name>` is Herdr's own convention: everything from the checkout
- * name on is the tail. OMP prd-herdr checkouts live at
- * `~/.prd-herdr/wt/<repo>/<name>-<timestamp>/<name>` (and `worktrees/<repo>/`
- * wrappers look alike) — there only the leaf is the worktree name; the repo
- * and timestamp wrapper segments are noise, so those markers highlight just
- * the leaf.
+ * Two signals, in order:
+ * 1. `checkoutPath` — the workspace's linked-worktree checkout root (from
+ *    relay metadata, so it is authoritative for ANY location). When `cwd`
+ *    is the checkout or sits beneath it, the tail runs from the checkout
+ *    basename through the rest of the path: `fix-one` or `fix-one/src/lib`.
+ * 2. Path conventions when no metadata knows about the pane:
+ *    `.worktrees/<name>` (Herdr's own) — everything from the checkout name
+ *    on is the tail. OMP prd-herdr checkouts live at
+ *    `~/.prd-herdr/wt/<repo>/<name>-<timestamp>/<name>` (and `worktrees/`
+ *    or `worktree/` wrappers look alike) — there only the leaf is the
+ *    worktree name; repo and timestamp wrapper segments are noise.
  */
-export function worktreeTailStart(path: string): number {
+export function worktreeTailStart(path: string, cwd = '', checkoutPath = ''): number {
   const text = String(path || '');
+  const checkout = String(checkoutPath || '').replace(/\/+$/, '');
+  const dir = String(cwd || '').replace(/\/+$/, '');
+  if (checkout && dir && (dir === checkout || dir.startsWith(`${checkout}/`))) {
+    const name = checkout.split('/').pop() || '';
+    const tail = name + dir.slice(checkout.length);
+    const start = text.length - tail.length;
+    if (name && start >= 0 && text.endsWith(tail)) return start;
+  }
   const dotted = text.indexOf('/.worktrees/');
   if (dotted >= 0) return dotted + '/.worktrees/'.length;
   const trimmed = text.replace(/\/+$/, '');
-  if (!/\/(?:worktrees|wt)\//.test(trimmed)) return -1;
+  if (!/\/(?:worktrees?|wt)\//.test(trimmed)) return -1;
   const leaf = trimmed.lastIndexOf('/') + 1;
   return leaf >= trimmed.length ? -1 : leaf;
 }

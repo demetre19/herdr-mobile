@@ -54,6 +54,15 @@
     return connection?.status === 'connected' && connection.inventory.state === 'ready';
   }));
   const deferredRelays = $derived(relays.filter((relay) => connections.get(relay.id)?.pairingDeferred));
+  // Agent pane → its workspace's linked-worktree checkout root, so a pane
+  // running inside ANY checkout gets the white tail regardless of where the
+  // checkout lives (metadata beats path guessing).
+  const checkoutByKey = $derived(new Map(workspaces
+    .filter((workspace) => workspace.worktree?.is_linked_worktree === true && workspace.worktree.checkout_path)
+    .map((workspace) => [
+      `${workspace.relay_id}${workspace.workspace_id}`,
+      workspace.worktree!.checkout_path,
+    ])));
 
   const statusDefinitions = [
     ['attention', 'Needs inspection', 'warning'],
@@ -853,7 +862,7 @@
                        the card, so the row spends its width on the directory.
                        A worktree path shows its tail — the checkout name —
                        in foreground white, everything else stays muted. -->
-                  {@const wt = worktreeTailStart(agentPath)}
+                  {@const wt = worktreeTailStart(agentPath, String(agent.cwd || ''), checkoutByKey.get(workspaceIdentity(agent)) || '')}
                   <span class="agent-path">{@render folderIcon()}<span>{#if wt >= 0}{agentPath.slice(0, wt)}<strong class="agent-path-tail">{agentPath.slice(wt)}</strong>{:else}{agentPath}{/if}</span></span>
                 {/if}
               {:else}
