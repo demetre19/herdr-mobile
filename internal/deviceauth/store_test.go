@@ -428,3 +428,71 @@ func TestRedeemInvitationRevokesSameNamedDevices(t *testing.T) {
 		t.Fatalf("new credential id = %q, want %q", got, result.Identity.CredentialID)
 	}
 }
+
+func TestOpenDedupesSameNamedCredentials(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Three "Mac-mini" credentials accumulated by repeated pairing — same
+	// name, unique device ids — plus an unrelated device. The most
+	// recently seen Mac-mini must survive.
+	old := testCredential("dev-old", "cred-oldest", RoleController)
+	old.Name = "Mac-mini"
+	old.PairedAt = time.Unix(100, 0).UTC()
+	old.LastSeenAt = time.Unix(200, 0).UTC()
+	mid := testCredential("dev-mid", "cred-middle", RoleController)
+	mid.Name = "Mac-mini"
+	mid.PairedAt = time.Unix(300, 0).UTC()
+	mid.LastSeenAt = time.Unix(400, 0).UTC()
+	fresh := testCredential("dev-fresh", "cred-fresh", RoleController)
+	fresh.Name = "Mac-mini"
+	fresh.PairedAt = time.Unix(500, 0).UTC()
+	fresh.LastSeenAt = time.Unix(600, 0).UTC()
+	other := testCredential("dev-desktop", "cred-desktop", RoleController)
+	other.Name = "DESKTOP"
+	store.state.Credentials = []credentialRecord{old, mid, fresh, other}
+	if err := store.persistLocked(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var active []Credential
+	for _, credential := range reopened.ListCredentials("") {
+		if !credential.Revoked {
+			active = append(active, credential)
+		}
+	}
+	if len(active) != 2 {
+		t.Fatalf("active credentials = %d, want 2: %#v", len(active), active)
+	}
+	ids := map[string]bool{}
+	for _, credential := range active {
+		ids[credential.CredentialID] = true
+	}
+	if !ids["cred-fresh"] {
+		t.Fatal("most recently seen Mac-mini credential was revoked")
+	}
+	if !ids["cred-desktop"] {
+		t.Fatal("differently-named credential was revoked")
+	}
+
+	// A clean reopen must not revoke the survivor as a "duplicate" of itself.
+	again, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := 0
+	for _, credential := range again.ListCredentials("") {
+		if !credential.Revoked {
+			kept++
+		}
+	}
+	if kept != 2 {
+		t.Fatalf("second open left %d active credentials, want 2", kept)
+	}
+}

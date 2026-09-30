@@ -414,7 +414,49 @@ func (s *Store) load() error {
 		return fmt.Errorf("invalid device store: %w", err)
 	}
 	s.state = state
+	s.dedupeCredentialsLocked()
 	return nil
+}
+
+// dedupeCredentialsLocked collapses legacy duplicate pairings: for every
+// device name, only the most-recently-active credential (LastSeenAt, falling
+// back to PairedAt) stays live; the rest are revoked so device_list shows a
+// single entry per machine. Names compare trimmed + case-insensitive.
+func (s *Store) dedupeCredentialsLocked() {
+	lastActivity := func(c credentialRecord) time.Time {
+		if !c.LastSeenAt.IsZero() {
+			return c.LastSeenAt
+		}
+		return c.PairedAt
+	}
+	keep := make(map[string]int)
+	changed := 0
+	for index := range s.state.Credentials {
+		record := &s.state.Credentials[index]
+		if record.Revoked {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(record.Name))
+		if prior, exists := keep[key]; exists {
+			loser, winner := index, prior
+			if lastActivity(*record).After(lastActivity(s.state.Credentials[prior])) {
+				loser, winner = prior, index
+			}
+			stale := &s.state.Credentials[loser]
+			stale.Revoked = true
+			stale.Version++
+			stale.Secret = ""
+			keep[key] = winner
+			changed++
+			continue
+		}
+		keep[key] = index
+	}
+	// Persist only when a dedupe pass actually revoked something; a failed
+	// write just leaves the next load to retry.
+	if changed > 0 {
+		_ = s.persistLocked()
+	}
 }
 
 func (s *Store) persistLocked() error {
