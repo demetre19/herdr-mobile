@@ -1300,6 +1300,39 @@ body[data-view='history'] .header-title > span { align-self: flex-start; font-si
 :root[data-interface-size='regular'] body[data-view='history'] .header-title,
 :root[data-interface-size='large'] body[data-view='history'] .header-title { align-items: center; }
 
+/* Center both header text lines on the page: the meta line inherited
+   align-self: flex-start which broke the column's centering, and the
+   back button + status dot in flow shifted the whole center axis right.
+   Parking them absolute at the left edge puts both text lines on the
+   true page center; the title column pads symmetrically so a wrapping
+   title never slides under the back button. */
+::root[data-interface-size='regular'] body[data-view='terminal'] .header-title > span,
+::root[data-interface-size='large'] body[data-view='terminal'] .header-title > span,
+::root[data-interface-size='regular'] body[data-view='history'] .header-title > span,
+::root[data-interface-size='large'] body[data-view='history'] .header-title > span { align-self: center; text-align: center; }
+
+::root[data-interface-size='regular'] body[data-view='terminal'] .header-row-top,
+::root[data-interface-size='large'] body[data-view='terminal'] .header-row-top {
+  position: relative;
+}
+::root[data-interface-size='regular'] body[data-view='terminal'] .header-row-top .header-back,
+::root[data-interface-size='large'] body[data-view='terminal'] .header-row-top .header-back {
+  position: absolute;
+  left: 0;
+}
+::root[data-interface-size='regular'] body[data-view='terminal'] .header-row-top > .status-dot,
+::root[data-interface-size='large'] body[data-view='terminal'] .header-row-top > .status-dot {
+  position: absolute;
+  left: 3rem;
+}
+::root[data-interface-size='regular'] body[data-view='terminal'] .header-title,
+::root[data-interface-size='large'] body[data-view='terminal'] .header-title {
+  padding-left: 3.2rem;
+  padding-right: 3.2rem;
+}
+::root[data-interface-size='regular'] body[data-view='terminal'] .header-title h1,
+::root[data-interface-size='large'] body[data-view='terminal'] .header-title h1 { text-align: center; }
+
 /* Second header lane reads as its own band so the icon row is visually
    separated from the title row above it. */
 :root[data-interface-size='regular'] body[data-view='terminal'] .header-row-actions,

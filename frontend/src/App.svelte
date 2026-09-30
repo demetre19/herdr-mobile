@@ -616,7 +616,7 @@
   >
     <div class="header-row header-row-top">
     {#if $currentView.view !== 'agents'}
-      <Button variant="ghost" size="icon" aria-label="Back" onclick={closeCurrentView}>
+      <Button class="header-back" variant="ghost" size="icon" aria-label="Back" onclick={closeCurrentView}>
         <svg class="back-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
           <path d="m15 18-6-6 6-6"></path>
         </svg>
