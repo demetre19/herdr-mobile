@@ -86,6 +86,27 @@ export function shortModelLabel(model: string): string {
   return trimmed.split('/').pop() || trimmed;
 }
 
+/**
+ * Start offset of the white "worktree tail" span in an agent's display path,
+ * or -1 when the path is not inside a worktree checkout.
+ *
+ * `.worktrees/<name>` is Herdr's own convention: everything from the checkout
+ * name on is the tail. OMP prd-herdr checkouts live at
+ * `~/.prd-herdr/wt/<repo>/<name>-<timestamp>/<name>` (and `worktrees/<repo>/`
+ * wrappers look alike) — there only the leaf is the worktree name; the repo
+ * and timestamp wrapper segments are noise, so those markers highlight just
+ * the leaf.
+ */
+export function worktreeTailStart(path: string): number {
+  const text = String(path || '');
+  const dotted = text.indexOf('/.worktrees/');
+  if (dotted >= 0) return dotted + '/.worktrees/'.length;
+  const trimmed = text.replace(/\/+$/, '');
+  if (!/\/(?:worktrees|wt)\//.test(trimmed)) return -1;
+  const leaf = trimmed.lastIndexOf('/') + 1;
+  return leaf >= trimmed.length ? -1 : leaf;
+}
+
 export function agentUpdatedAt(agent: Partial<Agent> | null | undefined): number {
   const value = Number(agent?.updated_at);
   return Number.isFinite(value) ? value : 0;

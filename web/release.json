@@ -2,22 +2,22 @@
   "schema": 1,
   "version": "1.0.11",
   "assets": 387,
-  "build": "fd92028d9a86f76f00aaa40071d4a22965db5b33f58b8ca717ea0b4ab572f6a9",
-  "entry": "/builds/1.0.11-387-fd92028d9a86f76f/index.html",
+  "build": "b4c0c7eb4fec5e8d665b419047f6cdd8de1ed62ded5598a8b614053b6de5b810",
+  "entry": "/builds/1.0.11-387-b4c0c7eb4fec5e8d/index.html",
   "files": {
     "entry": {
-      "path": "builds/1.0.11-387-fd92028d9a86f76f/index.html",
-      "sha256": "cc72907a99d4a0cfc074a82b822121b8c4d03452491c4764879de31b40cea8d0",
-      "integrity": "sha256-zHKQepnUoM/AdKgrgiEhuMTQNFJJHEdkh53jG0DOqNA=",
-      "brotli_sha256": "d2fe71b69233e623bb03d23588084f48496d6c0eae84c296e3635dafdb9b6dc8",
-      "brotli_integrity": "sha256-0v5xtpIz5iO7A9I1iAhPSEltbA6uhMKW42Ndr9ubbcg="
+      "path": "builds/1.0.11-387-b4c0c7eb4fec5e8d/index.html",
+      "sha256": "bb60fc82ddcd0a81828044b6269385b1980c918c7f6d7787c36b70704474e088",
+      "integrity": "sha256-u2D8gt3NCoGCgES2JpOFsZgMkYx/bXeHw2twcER04Ig=",
+      "brotli_sha256": "2f258a97df7f6c4bdd872de16dbb9286bad469b670d4c9e1c8d32021ed92da02",
+      "brotli_integrity": "sha256-LyWKl99/bEvdhy3hbbuShrrUabZw1MnhyNMgIe2S2gI="
     },
     "javascript": {
-      "path": "assets/app-6973f9503f828f1fd5faab385cd4a764d0247a88e7e22a3289a9e2bd0e1c9673.js",
-      "sha256": "6973f9503f828f1fd5faab385cd4a764d0247a88e7e22a3289a9e2bd0e1c9673",
-      "integrity": "sha256-aXP5UD+Cjx/V+qs4XNSnZNAkeojn4ioyianivQ4clnM=",
-      "brotli_sha256": "41a722e01a2ba7b52c741f20bad6a6985f1b602eb42da441bf632ffaa84a11e8",
-      "brotli_integrity": "sha256-Qaci4Borp7UsdB8gutammF8bYC60LaRBv2Mv+qhKEeg="
+      "path": "assets/app-4bb14b78007bc0a232897ae83a436bdfc84ff78074fe451b3346b91fc3e29f56.js",
+      "sha256": "4bb14b78007bc0a232897ae83a436bdfc84ff78074fe451b3346b91fc3e29f56",
+      "integrity": "sha256-S7FLeAB7wKIyiXroOkNr38hP94B0/kUbM0a5H8Pin1Y=",
+      "brotli_sha256": "f8c1901049a561aa8c45447f62af76d11c453fe5c43099a9f774577f895b8bcb",
+      "brotli_integrity": "sha256-+MGQEEmlYaqMRUR/Yq920RxFP+XEMJmp93RXf4lbi8s="
     },
     "stylesheet": {
       "path": "assets/app-4429f31edeb8b71db22629d1be49b94f7f75f70eb41dc817b0bbf18ad3048c39.css",
