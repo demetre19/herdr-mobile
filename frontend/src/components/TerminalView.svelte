@@ -161,6 +161,13 @@
   let virtualWindowFrame = 0;
   let virtualRowObserver: ResizeObserver | undefined;
   let virtualHeightCache = new Map<string, number>();
+  // Heights measured per row index. Unlike the html-keyed cache these survive
+  // content churn at an index whose height did not change, so a repaint does
+  // not fall back to estimates that re-anchor the viewport off by rows.
+  let measuredRowSizes = new Map<number, number>();
+  // A programmatic scrollTop write that overshot the content clamps at the
+  // bottom; the resulting scroll event must not re-arm stick-to-bottom.
+  let suppressBottomPinOnce = false;
   // A finger dragging the log freezes viewport correction: frames still patch
   // rows but nothing rewrites scrollTop out from under the touch.
   let touchHeld = false;
@@ -482,7 +489,7 @@
       });
       if (cachedFrame) {
         historyTruncated = Boolean(cachedFrame.truncated);
-        untrack(() => { void applyFrame(cachedFrame, preserve, preserveLineEnds) });
+        untrack(() => { void applyFrame(cachedFrame, preserve, preserveLineEnds, false) });
         return;
       }
       if (renderedRows.length) return;
@@ -590,6 +597,10 @@
       const stillStuck = virtualStickToBottom;
       if (touchHeld) { virtualScrollResetPending = false; return; }
       element.scrollTop = stillStuck ? element.scrollHeight : nextTop;
+      if (!stillStuck
+          && element.scrollHeight - element.scrollTop - element.clientHeight < 1) {
+        suppressBottomPinOnce = true;
+      }
       rememberVirtualScrollGeometry(element);
       if (stillStuck) virtualStickToBottom = true;
       virtualScrollResetPending = false;
@@ -764,6 +775,9 @@
     next: TerminalFrame,
     preserve = true,
     preserveLineEnds = preserve && !resizeSessionActive && !readOnly,
+    // Cached-frame replays during a resize wait must not consume the pending
+    // stick/anchor snapshot: it belongs to the apply that ends the wait.
+    consumePending = true,
   ) {
     const renderColumnCap = resizeLayoutActive
       ? lastLeasedColumns
@@ -791,25 +805,42 @@
     // the browser clamp scrollTop onto a position that merely LOOKS near the
     // bottom — the user's scrolled-up intent must win (jump-to-bottom bug).
     const frameStick = virtualStickToBottom;
-    const stick = resizeSessionActive && pendingResizeStick !== null
+    // Pending values capture scroll intent when a resize session opens and are
+    // consumed only by the apply that ends the wait — a cached-frame replay
+    // must not consume them, or the snapshot taken before the user scrolled
+    // keeps overriding the live position on every repaint (the slam vector).
+    const stick = consumePending && resizeSessionActive && pendingResizeStick !== null
       ? pendingResizeStick
-      : layoutChanged && pendingLayoutStick !== null
+      : consumePending && layoutChanged && pendingLayoutStick !== null
         ? pendingLayoutStick
         : frameStick;
     const previousTop = terminalElement?.scrollTop || 0;
     let previousAnchor = stick
       ? null
-      : pendingResizeAnchor || currentVirtualAnchor(previousTop);
+      : consumePending && pendingResizeAnchor
+        ? pendingResizeAnchor
+        : currentVirtualAnchor(previousTop);
     // Rows cropped from the front shift every index; keep the anchor on the
     // same row.
     const rowShift = renderedRowShift(renderedRows, rendered.rows);
     if (rowShift) wideGridOffsets.clear();
+    if (rowShift) {
+      // Index-keyed heights move with their rows; entries cropped from the
+      // front are dropped and the survivors re-indexed.
+      const shifted = new Map<number, number>();
+      for (const [index, size] of measuredRowSizes) {
+        if (index >= rowShift) shifted.set(index - rowShift, size);
+      }
+      measuredRowSizes = shifted;
+    }
     if (previousAnchor && rowShift) {
       previousAnchor = { ...previousAnchor, index: Math.max(0, previousAnchor.index - rowShift) };
     }
-    pendingResizeStick = null;
-    pendingResizeAnchor = null;
-    if (layoutChanged) pendingLayoutStick = null;
+    if (consumePending) {
+      pendingResizeStick = null;
+      pendingResizeAnchor = null;
+      if (layoutChanged) pendingLayoutStick = null;
+    }
     virtualStickToBottom = stick;
     virtualScrollResetPending = Boolean(terminalElement);
     displayed = rendered.display;
@@ -840,6 +871,13 @@
       virtualStickToBottom = true;
     } else {
       terminalElement.scrollTop = nextTop;
+      // A corrected position past the new bottom clamps to it; the scroll
+      // event that fires then reads atBottom and would resurrect the pin,
+      // dragging the reader to the end on the next frame.
+      if (terminalElement.scrollHeight - terminalElement.scrollTop
+          - terminalElement.clientHeight < 1) {
+        suppressBottomPinOnce = true;
+      }
       jumpVisible = true;
     }
     rememberVirtualScrollGeometry(terminalElement);
@@ -881,19 +919,35 @@
   // null = no trustworthy match: the caller holds the current scrollTop rather
   // than snapping to the anchor's stale index (that snap is what threw the
   // viewport to the top when the anchor row was a blank or a redrawn line).
+  // The anchor's own index is tried first because a frame rarely moves the
+  // row under the viewport; when it moved, only a bounded neighborhood is
+  // searched — TUIs repeat separator and status rows verbatim, and a
+  // whole-list scan happily re-anchors on a look-alike hundreds of rows away,
+  // which is the random-jump vector.
   function matchingAnchorIndex(anchor: VirtualTerminalAnchor): number | null {
     const target = anchor.text.trim();
     if (target.length < 4) return null;
+    const scoreAt = (index: number): number => {
+      if (index < 0 || index >= renderedRows.length) return 0;
+      const candidate = renderedRows[index].text.trim();
+      return candidate === target
+        ? 2
+        : target.length >= 8 && (candidate.includes(target) || target.includes(candidate)) ? 1 : 0;
+    };
+    // The anchor index is already rowShift-corrected by the caller; a verbatim
+    // match there is the row itself, no ambiguity.
+    if (scoreAt(anchor.index) === 2) return anchor.index;
+    const WINDOW = 40;
+    const start = Math.max(0, anchor.index - WINDOW);
+    const end = Math.min(renderedRows.length - 1, anchor.index + WINDOW);
     let bestIndex = -1;
     let bestScore = 0;
     let bestDistance = Number.POSITIVE_INFINITY;
-    for (let index = 0; index < renderedRows.length; index += 1) {
-      const candidate = renderedRows[index].text.trim();
-      const score = candidate === target
-        ? 2
-        : target.length >= 8 && (candidate.includes(target) || target.includes(candidate)) ? 1 : 0;
+    for (let index = start; index <= end; index += 1) {
+      const score = scoreAt(index);
+      if (!score) continue;
       const distance = Math.abs(index - anchor.index);
-      if (score > bestScore || (score === bestScore && score > 0 && distance < bestDistance)) {
+      if (score > bestScore || (score === bestScore && distance < bestDistance)) {
         bestIndex = index;
         bestScore = score;
         bestDistance = distance;
@@ -935,6 +989,7 @@
     if (layoutSignature !== virtualLayoutSignature) {
       virtualLayoutSignature = layoutSignature;
       virtualHeightCache.clear();
+      measuredRowSizes.clear();
     } else if (virtualHeightCache.size > Math.max(2_000, renderedRows.length * 2)) {
       virtualHeightCache.clear();
     }
@@ -946,7 +1001,9 @@
       || lastLeasedColumns
       || renderedResizeColumns
       || 80;
-    const sizes = renderedRows.map((row) => {
+    const sizes = renderedRows.map((row, index) => {
+      const measuredHere = measuredRowSizes.get(index);
+      if (measuredHere) return measuredHere;
       const measured = virtualHeightCache.get(row.html);
       if (measured) return measured;
       if (row.separator) return lineHeight * 1.2;
@@ -1087,7 +1144,12 @@
     if (virtualScrollResetPending) return;
     const previousTop = terminalElement.scrollTop;
     const wasAtBottom = virtualStickToBottom;
-    const anchor = virtualIndex.indexAt(previousTop);
+    // The anchor must be the row the reader actually sees at the viewport top —
+    // indexAt(previousTop) answered from the STALE index, which lands dozens of
+    // rows too deep once heights drift, so deltas of rows below the viewport
+    // were being added and the view walked down on every measure pass.
+    const anchor = currentVirtualAnchor(previousTop)?.index
+      ?? virtualIndex.indexAt(Math.max(0, previousTop - terminalScreenOffset()));
     let anchorDelta = 0;
     let changed = false;
     for (const entry of entries) {
@@ -1106,6 +1168,7 @@
       const delta = virtualIndex.update(index, height);
       if (!delta) continue;
       virtualHeightCache.set(renderedRows[index].html, height);
+      measuredRowSizes.set(index, height);
       if (index < anchor) anchorDelta += delta;
       changed = true;
     }
@@ -1124,6 +1187,11 @@
       // A held touch owns the viewport — never write scrollTop under a finger.
       if (touchHeld) { virtualScrollResetPending = false; return; }
       terminalElement.scrollTop = stillStuck ? terminalElement.scrollHeight : nextTop;
+      if (!stillStuck
+          && terminalElement.scrollHeight - terminalElement.scrollTop
+              - terminalElement.clientHeight < 1) {
+        suppressBottomPinOnce = true;
+      }
       rememberVirtualScrollGeometry(terminalElement);
       virtualScrollResetPending = false;
     });
@@ -1962,7 +2030,15 @@
       // An up-scroll while a reset apply is in flight is still user intent:
       // dropping it here left the pin alive and the pending apply slammed the
       // view back to the bottom.
-      if (terminalElement.scrollTop < virtualScrollTop - 1) virtualStickToBottom = false;
+      if (terminalElement.scrollTop < virtualScrollTop - 1) {
+        virtualStickToBottom = false;
+        // A pending resize snapshot captured while pinned must die with the
+        // pin — otherwise it re-arms on the apply that ends the wait and
+        // slams the reader back to the bottom anyway.
+        pendingResizeStick = null;
+        pendingResizeAnchor = null;
+        pendingLayoutStick = null;
+      }
       rememberVirtualScrollGeometry(terminalElement);
       return;
     }
@@ -1999,13 +2075,30 @@
     }
     if (movedTowardHistory) {
       virtualStickToBottom = false;
+      pendingResizeStick = null;
+      pendingResizeAnchor = null;
+      pendingLayoutStick = null;
       jumpVisible = true;
     } else if (atBottom) {
+      if (suppressBottomPinOnce) {
+        // A programmatic write just clamped at the bottom; consuming the event
+        // without re-arming the pin keeps the reader where a correction put
+        // them instead of slamming to the end on the next frame.
+        suppressBottomPinOnce = false;
+        jumpVisible = true;
+        scheduleVirtualWindow();
+        return;
+      }
       if (bottomDistance > 0.5) {
+        if (pendingResizeAnchor !== null || pendingResizeStick !== null) {
+          pendingResizeStick = true;
+          pendingResizeAnchor = null;
+        }
         jumpToBottom();
         return;
       }
       virtualStickToBottom = true;
+      if (pendingResizeAnchor !== null) pendingResizeStick = true;
       jumpVisible = false;
     } else if (!virtualStickToBottom) {
       jumpVisible = true;
