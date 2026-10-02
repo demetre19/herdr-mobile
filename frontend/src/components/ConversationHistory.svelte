@@ -84,6 +84,9 @@
   let lastScrollTop = 0;
   let lastScrollHeight = 0;
   let pinPendingTimer: ReturnType<typeof setTimeout> | undefined;
+  // A finger on the list owns the viewport: bottom pins stay intent-only while
+  // it is down, and anchor restores apply as deltas instead of absolute jumps.
+  let touchHeld = false;
   let mounted = false;
   let controllerReady = $state(false);
   let historyController: ConversationHistoryController | null = null;
@@ -315,6 +318,14 @@
       pinPendingTimer = undefined;
       pinPendingUntil = 0;
     }, 250);
+    if (touchHeld) {
+      // The finger owns the viewport — a bottom slam under a touch is the
+      // reader-visible jump. Bookkeeping still advances so trackScroll reads
+      // the real geometry; the release handler re-derives the pin.
+      lastScrollTop = element.scrollTop;
+      lastScrollHeight = element.scrollHeight;
+      return;
+    }
     element.scrollTop = element.scrollHeight;
     lastScrollTop = element.scrollTop;
     lastScrollHeight = element.scrollHeight;
@@ -493,7 +504,10 @@
       listElement.scrollTop += candidate.getBoundingClientRect().top - listTop - anchor[2];
       return;
     }
-    listElement.scrollTop = previousTop + listElement.scrollHeight - previousHeight;
+    // A held touch freezes the viewport — the absolute fallback is a jump
+    // under the finger; the release handler re-derives position and pin.
+    if (!touchHeld)
+      listElement.scrollTop = previousTop + listElement.scrollHeight - previousHeight;
   }
 
   function continuationMessage(): string {
@@ -822,6 +836,24 @@
       class="conversation-list"
       bind:this={listElement}
       onscroll={trackScroll}
+      onpointerdown={() => { touchHeld = true; }}
+      onpointerup={() => {
+        touchHeld = false;
+        // Re-derive the pin from real geometry: writes suppressed during the
+        // hold may have left a stale flag, and the same distance test
+        // trackScroll uses decides it.
+        if (listElement) {
+          const gap = listElement.scrollHeight - listElement.scrollTop - listElement.clientHeight;
+          pinnedToBottom = gap < 48;
+        }
+      }}
+      onpointercancel={() => {
+        touchHeld = false;
+        if (listElement) {
+          const gap = listElement.scrollHeight - listElement.scrollTop - listElement.clientHeight;
+          pinnedToBottom = gap < 48;
+        }
+      }}
       aria-label={`Conversation with ${agentName}`}
       aria-busy={historyBusy}
     >

@@ -592,10 +592,29 @@
   function resetVirtualScroll(element: HTMLElement, stick: boolean) {
     virtualScrollResetPending = true;
     virtualLayoutSignature = '';
-    const nextTop = resetVirtualRows(stick ? Number.POSITIVE_INFINITY : element.scrollTop);
+    const entryTop = element.scrollTop;
+    // Under a held touch the window must render around the live position, not
+    // around the stick target — a bottom-window render leaves the viewport
+    // staring at spacer for the whole gesture.
+    const nextTop = resetVirtualRows(
+      touchHeld || !stick ? entryTop : Number.POSITIVE_INFINITY,
+    );
     void tick().then(() => {
       const stillStuck = virtualStickToBottom;
-      if (touchHeld) { virtualScrollResetPending = false; return; }
+      if (touchHeld) {
+        // The finger owns the absolute position; the anchor delta over the
+        // live scrollTop still applies so estimate-driven spacer churn cannot
+        // slide content out from under the touch.
+        if (!stillStuck) {
+          element.scrollTop += nextTop - entryTop;
+          if (element.scrollHeight - element.scrollTop - element.clientHeight < 1) {
+            suppressBottomPinOnce = true;
+          }
+        }
+        rememberVirtualScrollGeometry(element);
+        virtualScrollResetPending = false;
+        return;
+      }
       element.scrollTop = stillStuck ? element.scrollHeight : nextTop;
       if (!stillStuck
           && element.scrollHeight - element.scrollTop - element.clientHeight < 1) {
@@ -861,10 +880,18 @@
     }
     if (layoutChanged) terminalElement.scrollLeft = 0;
     if (touchHeld) {
-      // Finger owns the viewport: patch rows around the live position, never
-      // write scrollTop — a stick write here slammed the view to the bottom
-      // mid-drag.
+      // The finger owns the absolute position — never slam to the bottom — but
+      // content churn still slides rows (spacer re-sizes, re-windowing), so the
+      // anchor delta over the live scrollTop applies. A no-op write when
+      // nothing moved.
       renderVirtualWindow(terminalElement.scrollTop);
+      if (!stick) {
+        terminalElement.scrollTop += nextTop - previousTop;
+        if (terminalElement.scrollHeight - terminalElement.scrollTop
+            - terminalElement.clientHeight < 1) {
+          suppressBottomPinOnce = true;
+        }
+      }
     } else if (stick) {
       terminalElement.scrollTop = terminalElement.scrollHeight;
       jumpVisible = false;
@@ -1022,10 +1049,10 @@
     });
     virtualIndex.reset(sizes);
     let nextTop = scrollTop;
-    // A finger on the glass freezes the view where the touch is: frame applies
-    // keep patching rows but never move the viewport out from under it. A
-    // failed anchor match does the same — better a held pixel than a guess.
-    if (previousAnchor && virtualIndex.length && !touchHeld) {
+    // Under a held touch the anchor math still runs: callers apply only the
+    // delta over the live scrollTop, so nextTop must stay anchor-corrected —
+    // skipping it leaves content sliding under the finger with no correction.
+    if (previousAnchor && virtualIndex.length) {
       const anchorIndex = matchingAnchorIndex(previousAnchor);
       if (anchorIndex !== null) {
         const anchorOffset = Math.min(
@@ -1184,8 +1211,21 @@
       // Read the pin at apply time: an up-scroll can clear it between the
       // measure pass and this tick — honour the user's position, don't slam.
       const stillStuck = virtualStickToBottom;
-      // A held touch owns the viewport — never write scrollTop under a finger.
-      if (touchHeld) { virtualScrollResetPending = false; return; }
+      // A held touch owns the absolute position — a stick write never runs —
+      // but the measured-height delta still applies over the live scrollTop so
+      // spacer churn cannot slide the row out from under the finger.
+      if (touchHeld) {
+        if (!stillStuck) {
+          terminalElement.scrollTop += nextTop - previousTop;
+          if (terminalElement.scrollHeight - terminalElement.scrollTop
+              - terminalElement.clientHeight < 1) {
+            suppressBottomPinOnce = true;
+          }
+        }
+        rememberVirtualScrollGeometry(terminalElement);
+        virtualScrollResetPending = false;
+        return;
+      }
       terminalElement.scrollTop = stillStuck ? terminalElement.scrollHeight : nextTop;
       if (!stillStuck
           && terminalElement.scrollHeight - terminalElement.scrollTop
@@ -2007,6 +2047,10 @@
 
 
   function jumpToBottom() {
+    // Under a held touch the pin is intent only: the bottom-window render
+    // would leave the viewport over spacer for the whole gesture since the
+    // scrollTop write below stays suppressed. Release re-derives the pin.
+    if (touchHeld) { virtualStickToBottom = true; return; }
     virtualStickToBottom = true;
     virtualScrollResetPending = true;
     renderVirtualWindow(Number.POSITIVE_INFINITY, true);
