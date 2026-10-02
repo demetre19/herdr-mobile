@@ -2611,7 +2611,7 @@
   <div
     class:resize-layout={resizeLayoutActive} class:resize-pending={resizeLayoutPending} class:wide-view={wideView}
     class="term-content preserve-layout"
-    style={terminalContentStyle}
+    data-copy-on-select
     bind:this={terminalElement}
     role="log"
     aria-label="Agent terminal output"

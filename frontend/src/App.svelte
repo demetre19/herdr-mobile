@@ -55,6 +55,7 @@
   } from '$lib/router';
   import { initializeDeviceSecurity, securityState } from '$lib/security';
   import { relayStore } from '$lib/store';
+  import { initializeSelectCopy } from '$lib/select-copy';
   import {
     appUpdateStatus,
     clearPendingRelayUpdate,
@@ -453,6 +454,7 @@
     const stopUpdates = initializeAppUpdates();
     const stopSecurity = initializeDeviceSecurity();
     const stopRouter = initializeRouter();
+    const stopSelectCopy = initializeSelectCopy();
     const setupLinkNavigation = () => {
       relayStore.importSetupLink(location, !$securityState.locked);
     };
@@ -472,6 +474,7 @@
       releaseSpeech();
       stopSecurity();
       stopUpdates();
+      stopSelectCopy();
       window.removeEventListener('hashchange', setupLinkNavigation);
       navigator.serviceWorker?.removeEventListener('message', serviceWorkerMessage);
       document.removeEventListener('visibilitychange', visibilityChanged);

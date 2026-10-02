@@ -829,7 +829,7 @@
         {historyStatusText || '\u00a0'}
       </p>
       <div class="conversation-history-sentinel" bind:this={topSentinel} aria-hidden="true"></div>
-      <div class="conversation-stream" bind:this={streamElement}>
+      <div class="conversation-stream" bind:this={streamElement} data-copy-on-select>
         {#each visibleEntries as entry (entry.id)}
           {@const code = fencedCodeText(entry.text)}
           {@const timestamp = formatTimestamp(entry.timestamp)}
