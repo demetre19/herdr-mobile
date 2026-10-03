@@ -19,12 +19,27 @@ const KEY_NAME: Record<string, string> = {
   space: ' ',
   spacebar: ' ',
   '↑': 'Up',
+  '⇧': 'Up',
+  '⬆': 'Up',
   '↓': 'Down',
+  '⇩': 'Down',
+  '⬇': 'Down',
   '←': 'Left',
+  '⇦': 'Left',
+  '⬅': 'Left',
   '→': 'Right',
+  '⇨': 'Right',
+  '➡': 'Right',
+  '⬕': 'Right',
   y: 'y',
   n: 'n',
 };
+
+const ARROW_KEYS: Record<string, true> = { Left: true, Up: true, Down: true, Right: true };
+const CANCEL_LABELS: Record<string, true> = { Cancel: true, Close: true, Quit: true, Back: true };
+const ARROW_CHARS = '↑⇧⬆↓⇩⬇←⇦⬅→⇨➡⬕';
+const ARROW_CHAR_CLASS = `[${ARROW_CHARS}]`;
+const ARROW_VERB: Record<string, string> = { Left: 'left', Up: 'up', Down: 'down', Right: 'right' };
 
 const DIRECTIONAL_ACTION_ORDER: Record<string, number> = {
   Left: 0,
@@ -47,12 +62,14 @@ const ACTION_LABEL: Record<string, string> = {
   deny: 'Deny',
   down: 'Down',
   edit: 'Edit',
+  left: 'Left',
   move: 'Move',
   navigate: 'Navigate',
   next: 'Next',
   no: 'No',
   previous: 'Previous',
   quit: 'Quit',
+  right: 'Right',
   select: 'Select',
   submit: 'Submit',
   toggle: 'Toggle',
@@ -60,10 +77,10 @@ const ACTION_LABEL: Record<string, string> = {
   yes: 'Yes',
 };
 
-const KEY_TOKEN = String.raw`(?:Ctrl\+[A-Za-z]|Alt\+[A-Za-z]|Shift\+[A-Za-z]|Enter|Return|Esc(?:ape)?|Tab|Space(?:bar)?|↑|↓|←|→)`;
+const KEY_TOKEN = String.raw`(?:Ctrl\+[A-Za-z]|Alt\+[A-Za-z]|Shift\+[A-Za-z]|Enter|Return|Esc(?:ape)?|Tab|Space(?:bar)?|${ARROW_CHAR_CLASS})`;
 const VERB_TOKEN = Object.keys(ACTION_LABEL).join('|');
 const SINGLE_HINT = new RegExp(`(${KEY_TOKEN})\\s*(?:to|:|=|-)?\\s*(${VERB_TOKEN})\\b`, 'giu');
-const PAIRED_ARROWS = /([↑↓←→])\s*[/|]\s*([↑↓←→])\s*(?:to|:|=|-)?\s*(navigate|move|select|choose|previous|next)?/giu;
+const PAIRED_ARROWS = new RegExp(`(${ARROW_CHAR_CLASS})\\s*[/|]\\s*(${ARROW_CHAR_CLASS})\\s*(?:to|:|=|-)?\\s*(navigate|move|select|choose|previous|next)?`, 'giu');
 const YES_NO = /\b(?:press\s+)?([yn])\s*[/|]\s*([yn])\b/iu;
 const EXPLICIT_LETTER = /\b([yn])\s*(?:to|:|=|-)+\s*(yes|no|accept|deny|confirm|cancel)\b/giu;
 const FILTER_FOOTER = /(?:^|\n)\s*type\s+to\s+filter[\s•·|]+enter\s+to\s+select(?:[\s•·|]+(?:tab\s+to\s+edit|esc\s+to\s+(?:clear|close)))*\s*$/iu;
@@ -78,12 +95,13 @@ function normalizeKey(value: string): string {
 
 function addAction(actions: TerminalMenuAction[], key: string, verb: string) {
   const normalized = normalizeKey(key);
-  const label = ACTION_LABEL[verb.toLocaleLowerCase()] || '';
-  if (!normalized || !label || actions.some((action) => action.keys[0] === normalized)) return;
+  const rawLabel = ACTION_LABEL[verb.toLocaleLowerCase()] || '';
+  if (!normalized || !rawLabel || actions.some((action) => action.keys[0] === normalized)) return;
+  const label = ARROW_KEYS[normalized] ? normalized : rawLabel;
   actions.push({
-    label: label === 'Navigate' || label === 'Move' ? normalized.replace('Arrow', '') : label,
+    label,
     keys: [normalized],
-    cancel: ['Cancel', 'Close', 'Quit', 'Back'].includes(label),
+    cancel: CANCEL_LABELS[rawLabel] ?? false,
   });
 }
 
@@ -112,16 +130,13 @@ export function detectTerminalMenu(value: string): TerminalMenu | null {
   const footer = candidateLines.join(' · ');
   const actions: TerminalMenuAction[] = [];
 
+  let pairedArrowsMatched = false;
   for (const match of footer.matchAll(PAIRED_ARROWS)) {
-    const verb = (match[3] || '').toLocaleLowerCase();
-    const isNavigation = verb === 'navigate' || verb === 'move';
-    // For generic navigation prompts (↑/↓ to navigate), offer the full D-pad
-    // so left/right are reachable without retyping them in the terminal hint.
-    const arrows = isNavigation ? ['↑', '↓', '←', '→'] : [match[1], match[2]];
-    for (const arrow of arrows) {
-      const fallback = arrow === '↑' ? 'up' : arrow === '↓' ? 'down' : arrow === '←' ? 'previous' : 'next';
-      addAction(actions, arrow, match[3] || fallback);
-    }
+    pairedArrowsMatched = true;
+    const dir1 = normalizeKey(match[1]);
+    const dir2 = normalizeKey(match[2]);
+    addAction(actions, match[1], match[3] || ARROW_VERB[dir1] || 'select');
+    addAction(actions, match[2], match[3] || ARROW_VERB[dir2] || 'select');
   }
   for (const match of footer.matchAll(SINGLE_HINT)) addAction(actions, match[1], match[2]);
   for (const match of footer.matchAll(EXPLICIT_LETTER)) addAction(actions, match[1], match[2]);
@@ -130,7 +145,17 @@ export function detectTerminalMenu(value: string): TerminalMenu | null {
     addAction(actions, yesNo[1], yesNo[1].toLocaleLowerCase() === 'y' ? 'yes' : 'no');
     addAction(actions, yesNo[2], yesNo[2].toLocaleLowerCase() === 'y' ? 'yes' : 'no');
   }
-  if (actions.some((action) => action.keys[0] === 'Left' || action.keys[0] === 'Right')) {
+
+  const presentArrows = new Set(actions.map((action) => action.keys[0]).filter((key) => ARROW_KEYS[key]));
+  // A paired-arrow hint means the TUI offers a D-pad; fill in the missing
+  // directions so left/right are always reachable when up/down are.
+  if (pairedArrowsMatched || presentArrows.size >= 2) {
+    addAction(actions, '←', 'left');
+    addAction(actions, '↑', 'up');
+    addAction(actions, '↓', 'down');
+    addAction(actions, '→', 'right');
+  }
+  if (actions.some((action) => ARROW_KEYS[action.keys[0]])) {
     actions.sort((left, right) => (
       (DIRECTIONAL_ACTION_ORDER[left.keys[0]] ?? 100)
       - (DIRECTIONAL_ACTION_ORDER[right.keys[0]] ?? 100)
