@@ -113,10 +113,15 @@ export function detectTerminalMenu(value: string): TerminalMenu | null {
   const actions: TerminalMenuAction[] = [];
 
   for (const match of footer.matchAll(PAIRED_ARROWS)) {
-    const fallback = match[1] === '↑' ? 'up' : match[1] === '↓' ? 'down' : match[1] === '←' ? 'previous' : 'next';
-    addAction(actions, match[1], match[3] || fallback);
-    const second = match[2] === '↑' ? 'up' : match[2] === '↓' ? 'down' : match[2] === '←' ? 'previous' : 'next';
-    addAction(actions, match[2], match[3] || second);
+    const verb = (match[3] || '').toLocaleLowerCase();
+    const isNavigation = verb === 'navigate' || verb === 'move';
+    // For generic navigation prompts (↑/↓ to navigate), offer the full D-pad
+    // so left/right are reachable without retyping them in the terminal hint.
+    const arrows = isNavigation ? ['↑', '↓', '←', '→'] : [match[1], match[2]];
+    for (const arrow of arrows) {
+      const fallback = arrow === '↑' ? 'up' : arrow === '↓' ? 'down' : arrow === '←' ? 'previous' : 'next';
+      addAction(actions, arrow, match[3] || fallback);
+    }
   }
   for (const match of footer.matchAll(SINGLE_HINT)) addAction(actions, match[1], match[2]);
   for (const match of footer.matchAll(EXPLICIT_LETTER)) addAction(actions, match[1], match[2]);

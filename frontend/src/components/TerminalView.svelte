@@ -2471,6 +2471,30 @@
   </svg>
 {/snippet}
 
+{#snippet arrowUpIcon()}
+  <svg class="key-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M12 19V5M5 12l7-7 7 7"></path>
+  </svg>
+{/snippet}
+
+{#snippet arrowDownIcon()}
+  <svg class="key-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M12 5v14M5 12l7 7 7-7"></path>
+  </svg>
+{/snippet}
+
+{#snippet arrowLeftIcon()}
+  <svg class="key-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M19 12H5M12 19l-7-7 7-7"></path>
+  </svg>
+{/snippet}
+
+{#snippet arrowRightIcon()}
+  <svg class="key-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M5 12h14M12 5l7 7-7 7"></path>
+  </svg>
+{/snippet}
+
 <!-- Drawn rather than typed: ⇥ and ⇧ resolve to a different fallback font on
      each platform, and their glyphs sit at different heights inside the em box,
      so a text label cannot be centred for Android and the desktop at once. -->
@@ -2984,8 +3008,9 @@
               variant={action.cancel ? 'secondary' : 'default'}
               size="sm"
               disabled={readOnly || keySending}
+              aria-label={action.label}
               onclick={() => { void sendKeys(action.keys, action.label); }}
-            ><kbd>{menuKeyLabel(action.keys)}</kbd>{action.label}</Button>
+            >{#if action.keys.length === 1 && action.keys[0] === 'Up'}{@render arrowUpIcon()}{:else if action.keys.length === 1 && action.keys[0] === 'Down'}{@render arrowDownIcon()}{:else if action.keys.length === 1 && action.keys[0] === 'Left'}{@render arrowLeftIcon()}{:else if action.keys.length === 1 && action.keys[0] === 'Right'}{@render arrowRightIcon()}{:else}<kbd>{menuKeyLabel(action.keys)}</kbd>{action.label}{/if}</Button>
           {/each}
         </div>
       </section>
