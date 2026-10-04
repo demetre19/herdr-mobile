@@ -90,6 +90,10 @@
     index: number;
     offset: number;
     text: string;
+    /** true when the anchor came from the DOM scan (its element exists); the
+     * indexAt fallback is estimate-only and must never drive a DOM
+     * correction — it can point at a mounted row dozens of rows away. */
+    dom?: boolean;
   }
 
 
@@ -604,6 +608,7 @@
     virtualScrollResetPending = true;
     virtualLayoutSignature = '';
     const entryTop = element.scrollTop;
+    const holdAnchor = touchHeld ? currentVirtualAnchor(entryTop) : null;
     // Under a held touch the window must render around the live position, not
     // around the stick target — a bottom-window render leaves the viewport
     // staring at spacer for the whole gesture.
@@ -613,15 +618,9 @@
     void tick().then(() => {
       const stillStuck = virtualStickToBottom;
       if (touchHeld) {
-        // The finger owns the absolute position; the anchor delta over the
-        // live scrollTop still applies so estimate-driven spacer churn cannot
-        // slide content out from under the touch.
-        if (!stillStuck) {
-          element.scrollTop += nextTop - entryTop;
-          if (element.scrollHeight - element.scrollTop - element.clientHeight < 1) {
-            suppressBottomPinOnce = true;
-          }
-        }
+        // The finger owns the visible row: correct by the anchor element's
+        // real displacement, not the estimate that paints the wrong spot.
+        applyHeldAnchor(element, holdAnchor, nextTop - entryTop);
         rememberVirtualScrollGeometry(element);
         virtualScrollResetPending = false;
         return;
@@ -895,18 +894,11 @@
     }
     if (layoutChanged) terminalElement.scrollLeft = 0;
     if (touchHeld) {
-      // The finger owns the absolute position — never slam to the bottom — but
-      // content churn still slides rows (spacer re-sizes, re-windowing), so the
-      // anchor delta over the live scrollTop applies. A no-op write when
-      // nothing moved.
+      // The finger owns the visible row — correct by its measured DOM
+      // displacement (same frame, pre-paint), never by the estimate that
+      // would paint the wrong spot and snap back.
       renderVirtualWindow(terminalElement.scrollTop);
-      if (!stick) {
-        terminalElement.scrollTop += nextTop - previousTop;
-        if (terminalElement.scrollHeight - terminalElement.scrollTop
-            - terminalElement.clientHeight < 1) {
-          suppressBottomPinOnce = true;
-        }
-      }
+      applyHeldAnchor(terminalElement, previousAnchor, nextTop - previousTop);
     } else if (stick) {
       terminalElement.scrollTop = terminalElement.scrollHeight;
       jumpVisible = false;
@@ -925,6 +917,34 @@
     rememberVirtualScrollGeometry(terminalElement);
     virtualScrollResetPending = false;
     observeVirtualRows();
+  }
+
+  // Under a held touch the correction must be measured, not estimated: the
+  // estimated anchor lands at the wrong spot, paints there, and the later
+  // measured pass snaps back — the visible jump-down-then-up the user sees.
+  // After tick() the DOM is current, so find the anchor row element and move
+  // scrollTop by its real displacement in the same frame (pre-paint).
+  function applyHeldAnchor(
+    element: HTMLElement,
+    anchor: VirtualTerminalAnchor | null,
+    estimateDelta: number,
+  ) {
+    if (anchor?.dom) {
+      const row = element.querySelector<HTMLElement>(`[data-terminal-row="${anchor.index}"]`);
+      if (row) {
+        const desired = element.getBoundingClientRect().top - Math.max(0, anchor.offset);
+        element.scrollTop += row.getBoundingClientRect().top - desired;
+        if (element.scrollHeight - element.scrollTop - element.clientHeight < 1) {
+          suppressBottomPinOnce = true;
+        }
+        return;
+      }
+    }
+    if (Math.abs(estimateDelta) < 0.5) return;
+    element.scrollTop += estimateDelta;
+    if (element.scrollHeight - element.scrollTop - element.clientHeight < 1) {
+      suppressBottomPinOnce = true;
+    }
   }
 
   function terminalScreenOffset(): number {
@@ -946,6 +966,7 @@
           index,
           offset: Math.max(0, viewport.top - element.getBoundingClientRect().top),
           text: renderedRows[index]?.text || '',
+          dom: true,
         };
       }
     }
@@ -1190,7 +1211,8 @@
     // indexAt(previousTop) answered from the STALE index, which lands dozens of
     // rows too deep once heights drift, so deltas of rows below the viewport
     // were being added and the view walked down on every measure pass.
-    const anchor = currentVirtualAnchor(previousTop)?.index
+    const anchorRecord = currentVirtualAnchor(previousTop);
+    const anchor = anchorRecord?.index
       ?? virtualIndex.indexAt(Math.max(0, previousTop - terminalScreenOffset()));
     let anchorDelta = 0;
     let changed = false;
@@ -1217,7 +1239,7 @@
     if (!changed) return;
     const nextTop = wasAtBottom ? virtualIndex.total : previousTop + anchorDelta;
     virtualScrollResetPending = true;
-    renderVirtualWindow(nextTop);
+    renderVirtualWindow(touchHeld ? terminalElement.scrollTop : nextTop);
     void tick().then(() => {
       if (!terminalElement) {
         virtualScrollResetPending = false;
@@ -1230,13 +1252,10 @@
       // but the measured-height delta still applies over the live scrollTop so
       // spacer churn cannot slide the row out from under the finger.
       if (touchHeld) {
-        if (!stillStuck) {
-          terminalElement.scrollTop += nextTop - previousTop;
-          if (terminalElement.scrollHeight - terminalElement.scrollTop
-              - terminalElement.clientHeight < 1) {
-            suppressBottomPinOnce = true;
-          }
-        }
+        // Correct by the anchor element's measured displacement: the index
+        // delta re-applies work the DOM correction already did and the row
+        // jumps on the next paint.
+        applyHeldAnchor(terminalElement, anchorRecord, nextTop - previousTop);
         rememberVirtualScrollGeometry(terminalElement);
         virtualScrollResetPending = false;
         return;
