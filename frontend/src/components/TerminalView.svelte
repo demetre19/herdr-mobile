@@ -94,6 +94,21 @@
      * indexAt fallback is estimate-only and must never drive a DOM
      * correction — it can point at a mounted row dozens of rows away. */
     dom?: boolean;
+    /** Verbatim texts of the anchor row and the rows under it — the
+     * fingerprint. A 5–6 line sequence is effectively unique in a
+     * scrollback, so resolving by content is immune to index drift,
+     * crop shifts, and rowShift false positives (the jump-to-top vector). */
+    block?: string[];
+  }
+
+  const ANCHOR_BLOCK_ROWS = 6;
+
+  function anchorBlock(index: number): string[] {
+    const block: string[] = [];
+    for (let cursor = index; cursor < Math.min(renderedRows.length, index + ANCHOR_BLOCK_ROWS); cursor += 1) {
+      block.push(renderedRows[cursor].text.trim());
+    }
+    return block;
   }
 
 
@@ -929,8 +944,16 @@
     anchor: VirtualTerminalAnchor | null,
     estimateDelta: number,
   ) {
-    if (anchor?.dom) {
-      const row = element.querySelector<HTMLElement>(`[data-terminal-row="${anchor.index}"]`);
+    if (anchor) {
+      // Resolve by content fingerprint first: after a render the anchor's
+      // captured index may sit in the OLD index space, so it must never
+      // drive the lookup directly. The dom flag only gates whether a DOM
+      // correction may run at all — the indexAt estimate never reaches in.
+      const resolved = matchingAnchorBlock(anchor);
+      const index = resolved ?? (anchor.dom ? anchor.index : -1);
+      const row = index >= 0
+        ? element.querySelector<HTMLElement>(`[data-terminal-row="${index}"]`)
+        : null;
       if (row) {
         const desired = element.getBoundingClientRect().top - Math.max(0, anchor.offset);
         element.scrollTop += row.getBoundingClientRect().top - desired;
@@ -967,6 +990,7 @@
           offset: Math.max(0, viewport.top - element.getBoundingClientRect().top),
           text: renderedRows[index]?.text || '',
           dom: true,
+          block: anchorBlock(index),
         };
       }
     }
@@ -976,7 +1000,43 @@
       index,
       offset: Math.max(0, scrollTop - contentTop - virtualIndex.offset(index)),
       text: renderedRows[index]?.text || '',
+      block: anchorBlock(index),
     };
+  }
+
+  // Resolve the anchor by CONTENT, not index: a run of five or six verbatim
+  // row texts is a near-unique fingerprint in a scrollback, so a crop, a
+  // rowShift false positive, or any index-space rewrite cannot re-anchor on
+  // a look-alike row — the mechanism that kept snapping the view to the
+  // very top when a new frame arrived mid-read.
+  function matchingAnchorBlock(anchor: VirtualTerminalAnchor): number | null {
+    const block = anchor.block;
+    if (!block?.length || !renderedRows.length) return null;
+    const needed = Math.max(2, Math.ceil(block.length * 0.6));
+    const scoreAt = (start: number): number => {
+      let score = 0;
+      for (let cursor = 0; cursor < block.length; cursor += 1) {
+        const row = renderedRows[start + cursor];
+        if (!row || row.text.trim() !== block[cursor]) break;
+        score += 1;
+      }
+      return score;
+    };
+    // The anchor index rarely moves between frames — try it first.
+    if (anchor.index >= 0 && scoreAt(anchor.index) >= needed) return anchor.index;
+    // Otherwise scan the whole render: the block is unique enough that a
+    // full scan is safe, and only a whole scan survives a large crop.
+    let bestIndex = -1;
+    let bestScore = 0;
+    for (let index = 0; index < renderedRows.length; index += 1) {
+      const score = scoreAt(index);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+        if (score === block.length) break;
+      }
+    }
+    return bestScore >= needed ? bestIndex : null;
   }
 
   // null = no trustworthy match: the caller holds the current scrollTop rather
@@ -1089,7 +1149,12 @@
     // delta over the live scrollTop, so nextTop must stay anchor-corrected —
     // skipping it leaves content sliding under the finger with no correction.
     if (previousAnchor && virtualIndex.length) {
-      const anchorIndex = matchingAnchorIndex(previousAnchor);
+      // Content fingerprint first — a crop or a rowShift false positive can
+      // make the captured index point at the wrong row, and matching it by
+      // index is how the viewport snapped to the top. The single-row match
+      // stays as the fallback for anchors without a usable block.
+      const anchorIndex = matchingAnchorBlock(previousAnchor)
+        ?? matchingAnchorIndex(previousAnchor);
       if (anchorIndex !== null) {
         const anchorOffset = Math.min(
           Math.max(0, previousAnchor.offset),
