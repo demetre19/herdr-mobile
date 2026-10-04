@@ -196,9 +196,16 @@
   // Any scroll while a resize settle waits means the anchor captured at wait
   // start is stale: the apply that ends the wait must re-anchor live.
   let pendingAnchorStale = false;
-  // A finger dragging the log freezes viewport correction: frames still patch
-  // rows but nothing rewrites scrollTop out from under the touch.
+  // A finger dragging the log freezes the viewport: while it is down, DOM
+  // churn is compensated by a translateY on .term-screen — compositor-level,
+  // synchronous, no scroll events, unclampable — instead of scrollTop writes
+  // that can paint a wrong position for a frame before the correction lands
+  // (the visible "jumps then snaps back"). The accumulated offset folds back
+  // into scrollTop on release. Viewport-top positions therefore use
+  // docScrollTop() = scrollTop - heldOffset while held.
   let touchHeld = false;
+  let heldOffset = 0;
+  let termScreenElement = $state<HTMLElement>(null!);
   const virtualIndex = new VirtualTerminalIndex();
   const wideGridOffsets = new Map<number, number>();
   let wideGridOffsetsPane = '';
@@ -514,7 +521,7 @@
         pendingAnchorStale = false;
         pendingResizeAnchor = virtualStickToBottom
           ? null
-          : currentVirtualAnchor(terminalElement?.scrollTop || 0);
+          : currentVirtualAnchor(touchHeld ? docScrollTop() : (terminalElement?.scrollTop || 0));
       });
       if (cachedFrame) {
         historyTruncated = Boolean(cachedFrame.truncated);
@@ -622,7 +629,7 @@
   function resetVirtualScroll(element: HTMLElement, stick: boolean) {
     virtualScrollResetPending = true;
     virtualLayoutSignature = '';
-    const entryTop = element.scrollTop;
+    const entryTop = touchHeld ? docScrollTop() : element.scrollTop;
     const holdAnchor = touchHeld ? currentVirtualAnchor(entryTop) : null;
     // Under a held touch the window must render around the live position, not
     // around the stick target — a bottom-window render leaves the viewport
@@ -858,7 +865,7 @@
       : consumePending && layoutChanged && pendingLayoutStick !== null
         ? pendingLayoutStick
         : frameStick;
-    const previousTop = terminalElement?.scrollTop || 0;
+    const previousTop = touchHeld ? docScrollTop() : (terminalElement?.scrollTop || 0);
     let previousAnchor = stick
       ? null
       : consumePending && pendingResizeAnchor && !pendingAnchorStale
@@ -909,10 +916,9 @@
     }
     if (layoutChanged) terminalElement.scrollLeft = 0;
     if (touchHeld) {
-      // The finger owns the visible row — correct by its measured DOM
-      // displacement (same frame, pre-paint), never by the estimate that
-      // would paint the wrong spot and snap back.
-      renderVirtualWindow(terminalElement.scrollTop);
+      // The finger owns the visible row — window around the doc-space
+      // position, then fold the measured displacement into the transform.
+      renderVirtualWindow(docScrollTop());
       applyHeldAnchor(terminalElement, previousAnchor, nextTop - previousTop);
     } else if (stick) {
       terminalElement.scrollTop = terminalElement.scrollHeight;
@@ -934,11 +940,46 @@
     observeVirtualRows();
   }
 
-  // Under a held touch the correction must be measured, not estimated: the
-  // estimated anchor lands at the wrong spot, paints there, and the later
-  // measured pass snaps back — the visible jump-down-then-up the user sees.
-  // After tick() the DOM is current, so find the anchor row element and move
-  // scrollTop by its real displacement in the same frame (pre-paint).
+  // The scroll offset in CONTENT coordinates. While a finger is held, part of
+  // the displacement lives in the .term-screen transform (heldOffset), so the
+  // viewport's position inside the document is scrollTop - heldOffset.
+  function docScrollTop(): number {
+    return (terminalElement?.scrollTop || 0) - heldOffset;
+  }
+
+  function setHeldOffset(offset: number) {
+    heldOffset = offset;
+    if (termScreenElement) {
+      termScreenElement.style.transform = offset ? `translateY(${offset}px)` : '';
+    }
+  }
+
+  // Fold the transform back into scrollTop — same visual position — then let
+  // normal scroll bookkeeping re-derive the pin from real geometry.
+  function releaseHeldScroll() {
+    if (!terminalElement) {
+      heldOffset = 0;
+      if (termScreenElement) termScreenElement.style.transform = '';
+      return;
+    }
+    if (heldOffset) {
+      const docTop = docScrollTop();
+      // Sync the remembered position first so the write's scroll event sees
+      // delta 0 — it is a coordinate conversion, not reader movement.
+      virtualScrollTop = docTop;
+      setHeldOffset(0);
+      terminalElement.scrollTop = docTop;
+      rememberVirtualScrollGeometry(terminalElement);
+    } else if (termScreenElement?.style.transform) {
+      termScreenElement.style.transform = '';
+    }
+  }
+
+  // Under a held touch NOTHING may write scrollTop: any write races the paint
+  // and shows up as a jump. DOM churn shifts content at constant scrollTop,
+  // so freeze it with the transform instead — correcting the anchor row's
+  // measured displacement via heldOffset is synchronous, compositor-cheap,
+  // and never fires a scroll event.
   function applyHeldAnchor(
     element: HTMLElement,
     anchor: VirtualTerminalAnchor | null,
@@ -956,18 +997,12 @@
         : null;
       if (row) {
         const desired = element.getBoundingClientRect().top - Math.max(0, anchor.offset);
-        element.scrollTop += row.getBoundingClientRect().top - desired;
-        if (element.scrollHeight - element.scrollTop - element.clientHeight < 1) {
-          suppressBottomPinOnce = true;
-        }
+        setHeldOffset(heldOffset + row.getBoundingClientRect().top - desired);
         return;
       }
     }
     if (Math.abs(estimateDelta) < 0.5) return;
-    element.scrollTop += estimateDelta;
-    if (element.scrollHeight - element.scrollTop - element.clientHeight < 1) {
-      suppressBottomPinOnce = true;
-    }
+    setHeldOffset(heldOffset - estimateDelta);
   }
 
   function terminalScreenOffset(): number {
@@ -1270,7 +1305,7 @@
   function measureVirtualRows(entries: ResizeObserverEntry[]) {
     if (!terminalElement || !entries.length) return;
     if (virtualScrollResetPending) return;
-    const previousTop = terminalElement.scrollTop;
+    const previousTop = touchHeld ? docScrollTop() : terminalElement.scrollTop;
     const wasAtBottom = virtualStickToBottom;
     // The anchor must be the row the reader actually sees at the viewport top —
     // indexAt(previousTop) answered from the STALE index, which lands dozens of
@@ -1304,7 +1339,7 @@
     if (!changed) return;
     const nextTop = wasAtBottom ? virtualIndex.total : previousTop + anchorDelta;
     virtualScrollResetPending = true;
-    renderVirtualWindow(touchHeld ? terminalElement.scrollTop : nextTop);
+    renderVirtualWindow(touchHeld ? docScrollTop() : nextTop);
     void tick().then(() => {
       if (!terminalElement) {
         virtualScrollResetPending = false;
@@ -1317,10 +1352,9 @@
       // but the measured-height delta still applies over the live scrollTop so
       // spacer churn cannot slide the row out from under the finger.
       if (touchHeld) {
-        // Correct by the anchor element's measured displacement: the index
-        // delta re-applies work the DOM correction already did and the row
-        // jumps on the next paint.
-        applyHeldAnchor(terminalElement, anchorRecord, nextTop - previousTop);
+        // Measured heights above the anchor changed: fold the delta into the
+        // transform — scrollTop stays untouched for the whole hold.
+        applyHeldAnchor(terminalElement, anchorRecord, anchorDelta);
         rememberVirtualScrollGeometry(terminalElement);
         virtualScrollResetPending = false;
         return;
@@ -1340,7 +1374,7 @@
     if (virtualWindowFrame) return;
     virtualWindowFrame = requestAnimationFrame(() => {
       virtualWindowFrame = 0;
-      if (terminalElement) renderVirtualWindow(terminalElement.scrollTop);
+      if (terminalElement) renderVirtualWindow(docScrollTop());
     });
   }
 
@@ -2195,6 +2229,22 @@
       rememberVirtualScrollGeometry(terminalElement);
       return;
     }
+    if (touchHeld) {
+      // The finger owns the viewport: scrollTop no longer equals the visual
+      // position (heldOffset carries part of it), so the atBottom/pin math
+      // below would misjudge. Upward intent still drops the pin immediately;
+      // release re-derives everything from real geometry.
+      if (movedUp) {
+        virtualStickToBottom = false;
+        pendingResizeStick = null;
+        pendingResizeAnchor = null;
+        pendingLayoutStick = null;
+      }
+      jumpVisible = !virtualStickToBottom;
+      rememberVirtualScrollGeometry(terminalElement);
+      scheduleVirtualWindow();
+      return;
+    }
     const scrollTop = terminalElement.scrollTop;
     const scrollHeight = terminalElement.scrollHeight;
     const clientHeight = terminalElement.clientHeight;
@@ -2794,8 +2844,24 @@
     aria-label="Agent terminal output"
     onscroll={handleScroll}
     onpointerdown={() => { touchHeld = true; }}
-    onpointerup={() => { touchHeld = false; if (terminalElement) { const gap = terminalElement.scrollHeight - terminalElement.scrollTop - terminalElement.clientHeight; virtualStickToBottom = gap < 48; jumpVisible = !virtualStickToBottom; } }}
-    onpointercancel={() => { touchHeld = false; if (terminalElement) { const gap = terminalElement.scrollHeight - terminalElement.scrollTop - terminalElement.clientHeight; virtualStickToBottom = gap < 48; jumpVisible = !virtualStickToBottom; } }}
+    onpointerup={() => {
+      touchHeld = false;
+      releaseHeldScroll();
+      if (terminalElement) {
+        const gap = terminalElement.scrollHeight - terminalElement.scrollTop - terminalElement.clientHeight;
+        virtualStickToBottom = gap < 48;
+        jumpVisible = !virtualStickToBottom;
+      }
+    }}
+    onpointercancel={() => {
+      touchHeld = false;
+      releaseHeldScroll();
+      if (terminalElement) {
+        const gap = terminalElement.scrollHeight - terminalElement.scrollTop - terminalElement.clientHeight;
+        virtualStickToBottom = gap < 48;
+        jumpVisible = !virtualStickToBottom;
+      }
+    }}
     onscrollcapture={syncWideGridScroll}
     onclick={terminalSurfaceClick}
   >
@@ -2804,7 +2870,7 @@
       aria-hidden="true"
       style="pointer-events: none; position: absolute; visibility: hidden; white-space: pre;"
     >{CELL_MEASURE_TEXT}</span>
-    <div class="term-screen" data-terminal-row-count={renderedRows.length}>
+    <div class="term-screen" bind:this={termScreenElement} data-terminal-row-count={renderedRows.length}>
       {#if virtualTopHeight > 0}
         <span class="terminal-virtual-spacer" style={`height:${virtualTopHeight}px`} aria-hidden="true"></span>
       {/if}
