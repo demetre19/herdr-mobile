@@ -168,6 +168,15 @@
   // A programmatic scrollTop write that overshot the content clamps at the
   // bottom; the resulting scroll event must not re-arm stick-to-bottom.
   let suppressBottomPinOnce = false;
+  // Finger drags emit a scroll event per sub-pixel step, and classifying each
+  // event alone (scrollTop < virtualScrollTop - 1) needs a >1px drop inside
+  // ONE event — a slow drag never dropped the pin and the atBottom branch
+  // slammed the view back every step. Accumulate upward travel across
+  // events; a downward move resets the counter.
+  let scrollUpAccum = 0;
+  // Any scroll while a resize settle waits means the anchor captured at wait
+  // start is stale: the apply that ends the wait must re-anchor live.
+  let pendingAnchorStale = false;
   // A finger dragging the log freezes viewport correction: frames still patch
   // rows but nothing rewrites scrollTop out from under the touch.
   let touchHeld = false;
@@ -483,6 +492,7 @@
       untrack(() => {
         if (pendingResizeStick !== null) return;
         pendingResizeStick = virtualStickToBottom;
+        pendingAnchorStale = false;
         pendingResizeAnchor = virtualStickToBottom
           ? null
           : currentVirtualAnchor(terminalElement?.scrollTop || 0);
@@ -499,6 +509,7 @@
         if (!waitingForResizedFrame) {
           pendingResizeStick = null;
           pendingResizeAnchor = null;
+          pendingAnchorStale = false;
         }
         // Once anything has painted, a transient gap never blanks the pane:
         // background tab spawns and lease renegotiations swap the frame out
@@ -836,7 +847,7 @@
     const previousTop = terminalElement?.scrollTop || 0;
     let previousAnchor = stick
       ? null
-      : consumePending && pendingResizeAnchor
+      : consumePending && pendingResizeAnchor && !pendingAnchorStale
         ? pendingResizeAnchor
         : currentVirtualAnchor(previousTop);
     // Rows cropped from the front shift every index; keep the anchor on the
@@ -858,6 +869,7 @@
     if (consumePending) {
       pendingResizeStick = null;
       pendingResizeAnchor = null;
+      pendingAnchorStale = false;
       if (layoutChanged) pendingLayoutStick = null;
     }
     virtualStickToBottom = stick;
@@ -869,8 +881,11 @@
     lastPreserveLayout = preserve;
     lastPreserveLineEnds = preserveLineEnds;
     lastRenderColumnCap = renderColumnCap;
+    // Under a held touch the window renders around the live position even
+    // when pinned: mounting the tail window while the finger holds the
+    // viewport mid-list leaves the screen on bare spacer until release.
     const nextTop = resetVirtualRows(
-      stick ? Number.POSITIVE_INFINITY : previousTop,
+      stick && !touchHeld ? Number.POSITIVE_INFINITY : previousTop,
       previousAnchor,
     );
     await tick();
@@ -2070,11 +2085,21 @@
     // A scroll event queued during teardown can fire after Svelte has already
     // cleared the bind:this reference; there is nothing left to measure.
     if (!terminalElement) return;
+    // Per-event deltas on a touch device are sub-pixel, so intent is the
+    // accumulated upward travel, not the size of this one event.
+    const scrollDelta = terminalElement.scrollTop - virtualScrollTop;
+    if (scrollDelta < 0) scrollUpAccum += -scrollDelta;
+    else if (scrollDelta > 0.5) scrollUpAccum = 0;
+    const movedUp = scrollUpAccum > 2;
+    // Any reposition during a resize wait invalidates the pending anchor.
+    if (pendingResizeAnchor !== null && Math.abs(scrollDelta) >= 0.5) {
+      pendingAnchorStale = true;
+    }
     if (virtualScrollResetPending) {
       // An up-scroll while a reset apply is in flight is still user intent:
       // dropping it here left the pin alive and the pending apply slammed the
       // view back to the bottom.
-      if (terminalElement.scrollTop < virtualScrollTop - 1) {
+      if (movedUp) {
         virtualStickToBottom = false;
         // A pending resize snapshot captured while pinned must die with the
         // pin — otherwise it re-arms on the apply that ends the wait and
@@ -2109,7 +2134,7 @@
     // or the restored full content slams the view back to the end.
     const shrinkClamp = scrollHeight < virtualScrollHeight - 1;
     const movedTowardHistory = !layoutChanged
-      && scrollTop < virtualScrollTop - 1
+      && movedUp
       && bottomDistance > 1;
     rememberVirtualScrollGeometry(terminalElement);
     if (shrinkClamp && !movedTowardHistory) {
@@ -2133,7 +2158,7 @@
         scheduleVirtualWindow();
         return;
       }
-      if (bottomDistance > 0.5) {
+      if (bottomDistance > 0.5 && scrollDelta > 0) {
         if (pendingResizeAnchor !== null || pendingResizeStick !== null) {
           pendingResizeStick = true;
           pendingResizeAnchor = null;
