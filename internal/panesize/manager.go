@@ -83,6 +83,10 @@ type paneState struct {
 	appliedRows     int
 	appliedColumns  int
 	resizedAt       time.Time
+	// consecutive stty write failures; a pane whose resolved PTY is wedged
+	// (recycled or renumbered) accumulates these, and callers can decide the
+	// entry is unrecoverable instead of retrying the dead path forever.
+	sttyFailures    int
 	leases          map[string]Lease
 }
 
@@ -167,7 +171,16 @@ func (m *Manager) Acquire(
 		var err error
 		current, err = m.readSize(ctx, state.tty)
 		if err != nil {
-			return 0, 0, err
+			// The tty recorded at resolve time can die underneath the entry:
+			// recycled PTY numbers hand the pane a fresh slave while this
+			// path keeps pointing at the dead node. Re-resolve once before
+			// giving up so a wedged entry heals on the next lease.
+			if reErr := m.reResolveTTY(ctx, paneID, state); reErr == nil {
+				current, err = m.readSize(ctx, state.tty)
+			}
+			if err != nil {
+				return 0, 0, err
+			}
 		}
 		// A local terminal resize while the lease is active becomes the new
 		// restore point, per dimension.
@@ -204,7 +217,7 @@ func (m *Manager) Acquire(
 		resizeNeeded = true
 	}
 	if resizeNeeded {
-		if err := m.setSize(ctx, state.tty, targetColumns, sttyRows); err != nil {
+		if err := m.applySize(ctx, paneID, state, targetColumns, sttyRows); err != nil {
 			if hadPrevious {
 				state.leases[clientID] = previous
 			} else {
@@ -595,7 +608,14 @@ func (m *Manager) reconcile(ctx context.Context, paneID string, state *paneState
 	if !constrainedRows && targetRows == state.appliedRows {
 		sttyRows = 0
 	}
-	if err := m.setSize(ctx, state.tty, target, sttyRows); err != nil {
+	if err := m.applySize(ctx, paneID, state, target, sttyRows); err != nil {
+		// The write kept failing even on a freshly resolved tty — the pane is
+		// gone for good. Drop the entry so the sweep stops storming; the next
+		// Acquire resolves a fresh entry if the pane ever comes back.
+		if m.paneGone(ctx, paneID) {
+			delete(m.panes, paneID)
+			return nil
+		}
 		return err
 	}
 	state.resizedAt = m.now()
@@ -610,7 +630,14 @@ func (m *Manager) restore(ctx context.Context, paneID string, state *paneState) 
 		// The height was never leased away; leave the tty's rows alone.
 		sttyRows = 0
 	}
-	if err := m.setSize(ctx, state.tty, state.baselineColumns, sttyRows); err != nil {
+	// Leases are already gone here: a permanently dead pane only burns sweep
+	// cycles on an unwritable tty. On failure, remove the entry unless the
+	// pane itself is still resolvable — then the next sweep retries.
+	if err := m.applySize(ctx, paneID, state, state.baselineColumns, sttyRows); err != nil {
+		if m.paneGone(ctx, paneID) {
+			delete(m.panes, paneID)
+			return nil
+		}
 		return err
 	}
 	state.appliedColumns = state.baselineColumns
@@ -618,3 +645,49 @@ func (m *Manager) restore(ctx context.Context, paneID string, state *paneState) 
 	delete(m.panes, paneID)
 	return nil
 }
+
+// applySize writes the window size, self-healing a stale tty first: when the
+// stored slave path no longer accepts writes the pane is re-resolved once and
+// the write is retried on the fresh device. A panes entry otherwise stays
+// wedged forever — observed as a once-per-second sweep failure for hours —
+// and every client lease against it times out.
+func (m *Manager) applySize(ctx context.Context, paneID string, state *paneState, columns, rows int) error {
+	if err := m.setSize(ctx, state.tty, columns, rows); err == nil {
+		state.sttyFailures = 0
+		return nil
+	}
+	if reErr := m.reResolveTTY(ctx, paneID, state); reErr == nil {
+		if err := m.setSize(ctx, state.tty, columns, rows); err == nil {
+			state.sttyFailures = 0
+			return nil
+		}
+	}
+	state.sttyFailures++
+	return ErrResizeFailed
+}
+
+// reResolveTTY asks the provider for the pane's live foreground TTY again and
+// swaps it into the entry, carrying the newly observed size over as the
+// baseline — the old baseline belonged to the dead PTY, and restoring a dead
+// pane's width onto a fresh one would pick the wrong size.
+func (m *Manager) reResolveTTY(ctx context.Context, paneID string, state *paneState) error {
+	fresh, err := m.resolvePane(ctx, paneID)
+	if err != nil {
+		return err
+	}
+	state.tty = fresh.tty
+	state.baselineRows = fresh.baselineRows
+	state.baselineColumns = fresh.baselineColumns
+	state.appliedRows = fresh.appliedRows
+	state.appliedColumns = fresh.appliedColumns
+	return nil
+}
+
+// paneGone reports whether the pane can no longer be resolved at all — the
+// foreground process, PTY, or pane itself has vanished — making its lease
+// state permanently unactionable.
+func (m *Manager) paneGone(ctx context.Context, paneID string) bool {
+	_, err := m.resolvePane(ctx, paneID)
+	return err != nil
+}
+

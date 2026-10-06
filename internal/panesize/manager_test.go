@@ -551,3 +551,72 @@ func TestSttyDeviceFlagIsPlatformAppropriate(t *testing.T) {
 		t.Fatalf("darwin flag = %q, %v", flag, err)
 	}
 }
+
+// The PTY behind a leased pane can die under the cached tty path — herdr
+// recycles slave numbers when panes restart. Acquire must re-resolve and
+// resize the fresh device instead of reporting the dead path's failure.
+func TestAcquireReResolvesAWedgedTTY(t *testing.T) {
+	now := time.Unix(600, 0)
+	provider := &fakeProcessInfoProvider{infos: map[string]*herdr.PaneProcessInfo{
+		"pane-1": processInfo("pane-1", 821),
+	}}
+	runner := &fakeCommandRunner{
+		ttyByPID: map[int]string{821: "pts/11", 822: "pts/12"},
+		sizes:    map[string]terminalSize{"/dev/pts/11": {rows: 30, columns: 120}},
+	}
+	manager := testManager(provider, runner, func() time.Time { return now })
+
+	if _, _, err := manager.Acquire(context.Background(), "client-a", "pane-1", 80, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// The pane's process restarts onto a new PTY; the old slave node dies.
+	delete(runner.sizes, "/dev/pts/11")
+	provider.infos["pane-1"] = processInfo("pane-1", 822)
+	runner.sizes["/dev/pts/12"] = terminalSize{rows: 30, columns: 160}
+
+	applied, _, err := manager.Acquire(context.Background(), "client-a", "pane-1", 80, 0)
+	if err != nil {
+		t.Fatalf("Acquire() after tty recycle error = %v", err)
+	}
+	if applied != 80 {
+		t.Fatalf("Acquire() columns = %d, want 80", applied)
+	}
+	if got := runner.sizes["/dev/pts/12"]; got.columns != 80 {
+		t.Fatalf("fresh tty size = %+v, want 80 columns", got)
+	}
+}
+
+// A pane whose process vanishes entirely can never be resized again. Once the
+// write fails on the re-resolved path too, the sweep must drop the entry
+// instead of logging a failure every second forever.
+func TestSweepDropsAnUnresolvablePane(t *testing.T) {
+	now := time.Unix(700, 0)
+	provider := &fakeProcessInfoProvider{infos: map[string]*herdr.PaneProcessInfo{
+		"pane-1": processInfo("pane-1", 921),
+	}}
+	runner := &fakeCommandRunner{
+		ttyByPID: map[int]string{921: "pts/13"},
+		sizes:    map[string]terminalSize{"/dev/pts/13": {rows: 30, columns: 120}},
+	}
+	manager := testManager(provider, runner, func() time.Time { return now })
+
+	if _, _, err := manager.Acquire(context.Background(), "client-a", "pane-1", 72, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	delete(runner.sizes, "/dev/pts/13")
+	delete(provider.infos, "pane-1")
+	now = now.Add(LeaseTTL)
+
+	if err := manager.SweepExpired(context.Background()); err != nil {
+		t.Fatalf("SweepExpired() error = %v, want nil so the entry is dropped", err)
+	}
+	if len(manager.panes) != 0 {
+		t.Fatalf("tracked panes = %d, want the dead pane removed", len(manager.panes))
+	}
+	// A second sweep must stay clean: no state, no work, no error.
+	if err := manager.SweepExpired(context.Background()); err != nil {
+		t.Fatalf("second SweepExpired() error = %v", err)
+	}
+}
