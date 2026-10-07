@@ -64,13 +64,16 @@ You need one small public host (any cheap VPS) and the computers you want to
 control. An LLM agent or a human can follow these steps:
 
 1. **Run a WebSocket gateway on the public host.** Build the gateway binary
-   (`cmd/herdr-gateway` in this repo, or the `Dockerfile.gateway` image) and
-   run it bound to loopback, e.g. `127.0.0.1:8443`. Put a TLS reverse proxy
-   (Caddy, nginx, …) in front of it on a public name such as
+   (`cmd/herdr-gateway` in this repo — a plain Go build, no Docker required)
+   and run it bound to loopback, e.g. `127.0.0.1:8443`, under a process
+   manager (systemd user unit, launchd, or `supervisord`). Put a TLS reverse
+   proxy (Caddy, nginx, …) in front of it on a public name such as
    `wss://gateway.example.com`, forwarding the WebSocket upgrade headers.
    Open inbound UDP 3478 as well if you want the built-in address-discovery
    (STUN-like) listener that helps phones on cellular reach relays behind NAT.
    The gateway speaks plain HTTP internally; TLS terminates at the proxy.
+   (A `Dockerfile.gateway` image exists if you prefer containers, but the
+   binary + proxy setup is the simpler path.)
 2. **Install the relay daemon on each computer.** Build or install the relay
    (`cmd/herdr-mobile-relay`), point it at your gateway with
    `HERDR_GATEWAY_URL=wss://gateway.example.com`, and run it as a background
@@ -88,6 +91,43 @@ control. An LLM agent or a human can follow these steps:
 
 No inbound ports are needed on the controlled computers — only the gateway
 host is public.
+
+## How the fork author runs it (no Docker)
+
+The production deployment behind this fork deliberately skips containers.
+One small VPS, one binary, one proxy, one static directory:
+
+- **Gateway as a plain binary.** `herdr-gateway` is cross-compiled once from
+  this repo and runs bound to loopback under a process manager on the VPS.
+  No image build, no registry, no compose file on the server — upgrading the
+  gateway is "copy the new binary, restart the service".
+- **Caddy as the only public component.** A single native Caddy instance
+  terminates TLS for everything: one site block proxies the gateway's
+  WebSocket endpoint (`wss://gateway.example.com`), another serves the phone
+  app as static files (`https://app.example.com`). Each site lives in its own
+  small config file imported by the main `Caddyfile`, so adding or moving a
+  name is a two-line change and a reload.
+- **The phone app is just a directory.** The frontend build output (`web/`)
+  is rsync'd to the docroot. Caddy sends `no-store` for entrypoints and
+  `immutable` caching for hashed assets, so phones pick up new bundles on
+  their next open and old hashed builds keep serving cached bootstraps.
+- **A warm spare, not a single point of failure.** A second VPS keeps a full
+  copy of the gateway binary/source, the Caddy site configs, and the app
+  docroot. If the primary host dies, flipping two DNS A records moves the
+  whole stack over in minutes; while a record points at the spare, every
+  deploy syncs there too so it never goes stale.
+- **Relays stay out of the way.** Each Mac runs the relay as a launchd agent
+  from a staged release build under `~/.local/share/herdr-mobile-relay/`
+  (`releases/` plus a `current` symlink). The phone's updater performs relay
+  upgrades itself: it fetches this fork's GitHub release, verifies the
+  manifest, swaps the symlink, restarts the service, and rolls back on a
+  failed health check — no SSH for routine updates.
+- **Frontend-only changes never touch the relays.** Rebuild `web/`, rsync it
+  to the docroot, done — the relays keep running.
+
+Encryption is exactly the upstream model: the gateway and the web host see
+encrypted frames and static files only. Pairing keys and device credentials
+never leave the relays and the phone.
 
 ## Polishes in this fork
 
