@@ -962,6 +962,10 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .arrow-popup button { background: var(--secondary); border: 0; border-radius: .4rem; color: var(--foreground); height: 2.3rem; }
 .fkey-popup { background: var(--card); border: 1px solid var(--border); border-radius: .625rem; bottom: calc(100% - .2rem); display: grid; gap: .2rem; grid-template-columns: repeat(4, 2.6rem); padding: .35rem; position: absolute; right: .55rem; z-index: 10; }
 .fkey-popup button { background: var(--secondary); border: 0; border-radius: .4rem; color: var(--foreground); font-size: .72rem; height: 2.3rem; }
+.ctrl-chord-popup { background: var(--card); border: 1px solid var(--border); border-radius: .625rem; bottom: calc(100% - .2rem); display: grid; gap: .2rem; padding: .35rem; position: absolute; right: .55rem; z-index: 10; }
+.ctrl-chord-popup button { align-items: center; background: var(--secondary); border: 0; border-radius: .4rem; color: var(--foreground); display: flex; gap: .6rem; justify-content: space-between; min-height: 2.3rem; padding: 0 .55rem; }
+.ctrl-chord-popup button kbd { font-size: .72rem; font-weight: 700; }
+.ctrl-chord-popup button span { color: var(--muted); font-size: .68rem; }
 /* Question-mode keys render outside .terminal-bottom, so popups there anchor
    to this strip pinned to the bottom of the question main. */
 .question-popups { bottom: 0; left: 0; position: absolute; right: 0; }

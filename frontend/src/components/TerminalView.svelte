@@ -45,6 +45,7 @@
     stopSpeech,
   } from '$lib/speech';
   import { interfaceSize, terminalHeightLease, theme } from '$lib/preferences';
+  import { cachedPaneSize, storePaneSize } from '$lib/pane-size-cache';
   import { replaceView } from '$lib/router';
   import { targetRefForAgent, targetRefMatchesAgent } from '$lib/resource-id';
   import { securityState } from '$lib/security';
@@ -279,8 +280,13 @@
   let leaseGeneration = 0;
   let leaseInFlight = false;
   let leaseTarget: Agent | null = null;
-  let lastLeasedColumns = $state(0);
-  let lastLeasedRows = 0;
+  // Seeded from the per-pane cache: the phone's width never changes between
+  // visits, so the last applied lease is the right one. This engages the
+  // wrapping layout on the first paint instead of after a measure → lease →
+  // settle round trip; the background lease below still confirms it.
+  const cachedPaneLease = cachedPaneSize(untrack(() => agent.pane_id));
+  let lastLeasedColumns = $state(cachedPaneLease.columns);
+  let lastLeasedRows = cachedPaneLease.rows;
   let renderedResizeColumns = $state(0);
   let measuredCellWidth = $state(0);
   let queuedLease: { columns: number; rows: number; force: boolean } | null = null;
@@ -1443,6 +1449,7 @@
 
   function openTerminalFind() {
     arrowsOpen = false;
+    ctrlChordMenuOpen = false;
     findOpen = true;
     void tick().then(() => {
       findInputElement?.focus();
@@ -1932,6 +1939,7 @@
     if (readOnly) return;
     arrowsOpen = false;
     fkeysOpen = false;
+    ctrlChordMenuOpen = false;
     if (which === 'ctrl') ctrlArmed = !ctrlArmed;
     else if (which === 'alt') altArmed = !altArmed;
     else shiftArmed = !shiftArmed;
@@ -1989,6 +1997,50 @@
 
   function sendTab() {
     sendTerminalKey('Tab');
+  }
+
+  // Long-press ^ opens a chord menu: the common control chords go out
+  // directly through send_keys, no soft keyboard round trip. A plain tap
+  // still arms Ctrl as before.
+  const CTRL_CHORD_MENU: { keys: string[]; label: string; hint: string }[] = [
+    { keys: ['ctrl+c'], label: 'Ctrl+C', hint: 'Interrupt' },
+    { keys: ['ctrl+d'], label: 'Ctrl+D', hint: 'EOF / exit' },
+    { keys: ['ctrl+z'], label: 'Ctrl+Z', hint: 'Suspend' },
+    { keys: ['ctrl+l'], label: 'Ctrl+L', hint: 'Clear screen' },
+    { keys: ['ctrl+r'], label: 'Ctrl+R', hint: 'Search history' },
+  ];
+  let ctrlChordMenuOpen = $state(false);
+  let ctrlPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let ctrlLongPressFired = false;
+
+  function ctrlPressStart() {
+    ctrlLongPressFired = false;
+    ctrlPressTimer = setTimeout(() => {
+      ctrlPressTimer = null;
+      ctrlLongPressFired = true;
+      ctrlChordMenuOpen = true;
+    }, 450);
+  }
+
+  function ctrlPressCancel() {
+    if (ctrlPressTimer !== null) {
+      clearTimeout(ctrlPressTimer);
+      ctrlPressTimer = null;
+    }
+  }
+
+  function toggleCtrlGuarded() {
+    // The tap that ended a long-press must not also arm the modifier.
+    if (ctrlLongPressFired) {
+      ctrlLongPressFired = false;
+      return;
+    }
+    toggleCtrl();
+  }
+
+  function sendCtrlChord(keys: string[], label: string) {
+    ctrlChordMenuOpen = false;
+    void sendKeys(keys, label);
   }
 
   function sendFunctionKey(number: number) {
@@ -2469,6 +2521,7 @@
             || applied.rows !== lastLeasedRows;
           lastLeasedColumns = applied.columns;
           lastLeasedRows = applied.rows;
+          storePaneSize(target.pane_id, applied.columns, applied.rows);
           paneSizeLeaseError = '';
           if (changed) {
             // The pane repaints at the new size: read again so the live
@@ -2758,6 +2811,21 @@
   {/if}
 {/snippet}
 
+{#snippet ctrlChordPopup()}
+  {#if ctrlChordMenuOpen}
+    <div class="ctrl-chord-popup" role="menu" aria-label="Common Ctrl chords">
+      {#each CTRL_CHORD_MENU as chord (chord.keys.join('+'))}
+        <button
+          role="menuitem"
+          disabled={readOnly || keySending}
+          onpointerdown={(event) => event.preventDefault()}
+          onclick={() => sendCtrlChord(chord.keys, chord.label)}
+        ><kbd>{chord.label}</kbd><span>{chord.hint}</span></button>
+      {/each}
+    </div>
+  {/if}
+{/snippet}
+
 <main
   class:has-actions={inputLocked || nextBlocked}
   class:question-only={questionMode}
@@ -2794,6 +2862,7 @@
     <div class="question-popups">
       {@render fkeyPopup()}
       {@render arrowPopup()}
+      {@render ctrlChordPopup()}
     </div>
   {/if}
   <div class:hidden={questionMode} class="terminal-view term">
@@ -3243,10 +3312,14 @@
           disabled={readOnly || keySending}
           aria-controls="modifier-key-input"
           aria-pressed={ctrlArmed}
-          aria-label="Ctrl"
-          title="Arm Ctrl; combine it with Shift or Alt"
-          onpointerdown={(event) => event.preventDefault()}
-          onclick={toggleCtrl}
+          aria-expanded={ctrlChordMenuOpen}
+          aria-label="Ctrl — hold for common chords"
+          title="Tap to arm Ctrl; hold for Ctrl+C, Ctrl+D, Ctrl+Z, Ctrl+L, Ctrl+R"
+          onpointerdown={(event) => { event.preventDefault(); ctrlPressStart(); }}
+          onpointerup={ctrlPressCancel}
+          onpointerleave={ctrlPressCancel}
+          onpointercancel={ctrlPressCancel}
+          onclick={toggleCtrlGuarded}
         ><span class="key-caret">^</span></Button>
         <Button
           variant="secondary"
@@ -3267,7 +3340,7 @@
           aria-label="Function keys"
           aria-expanded={fkeysOpen}
           onpointerdown={(event) => event.preventDefault()}
-          onclick={() => { fkeysOpen = !fkeysOpen; arrowsOpen = false; }}
+          onclick={() => { fkeysOpen = !fkeysOpen; arrowsOpen = false; ctrlChordMenuOpen = false; }}
         >F keys</Button>
       </div>
       <div class="arrow-menu">
@@ -3278,7 +3351,7 @@
           aria-label="Arrow keys"
           aria-expanded={arrowsOpen}
           onpointerdown={(event) => event.preventDefault()}
-          onclick={() => { arrowsOpen = !arrowsOpen; fkeysOpen = false; }}
+          onclick={() => { arrowsOpen = !arrowsOpen; fkeysOpen = false; ctrlChordMenuOpen = false; }}
         >
           {@render arrowIcon()}
         </Button>
@@ -3292,6 +3365,7 @@
          .terminal-bottom (position:relative) instead. -->
     {@render fkeyPopup()}
     {@render arrowPopup()}
+    {@render ctrlChordPopup()}
   </div>
 </div>
 </main>
