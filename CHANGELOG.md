@@ -5,6 +5,58 @@ project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.16] - 2026-10-08 (fork: demetre19/herdr-mobile)
+
+### Fixed
+
+- Pane size: a lease at the maximum width (wide view) now overrides the
+  narrowest-client-wins rule; a second session's narrower lease no longer
+  caps the pane.
+
+## [1.0.15] - 2026-10-08
+
+### Fixed
+
+- Pane size: resolve a pane's tty by walking every foreground process —
+  harness-spawned agents report `stdin` for their group leader, which made
+  every lease fail; and reject `stdin`/`stdout`/`stderr`/`notty` as device
+  names instead of silently resolving them to /dev/stdin.
+
+## [1.0.14] - 2026-10-08
+
+### Changed
+
+- Directory browser stays open while drilling into folders; a filter query
+  persists, a path query clears on landing.
+
+## [1.0.13] - 2026-10-08
+
+### Fixed
+
+- Managed updates: stamped release binaries carry the short commit SHA, but
+  the updater only accepted a full 40-hex revision — every release install
+  read as "not a released build". Revision matching now accepts 7–40 hex
+  with prefix tolerance, and a stale blocked state reconciles to current.
+
+## [1.0.12] - 2026-10-08
+
+### Fixed
+
+- Pane size: heal a wedged tty by re-resolving on write failure and dropping
+  entries for panes that no longer resolve (ends the 1 Hz "could not be
+  changed" sweep and the permanently narrow pane).
+
+### Added
+
+- Terminal: global per-pane size cache seeded on open (no
+  "Resizing terminal…" on tab switches), tap-toggle Ctrl chord popup with
+  agent-aware chords (Oh My Pi surfaces Ctrl+P first), queueable key row
+  with per-key flash feedback, conversation history lands at the start of
+  the newest reply, persistent Ctrl popup closes on a second tap/✕/Esc,
+  wide-view toasts clear in 1.5s, and the first confirmed lease always
+  re-reads the pane.
+
+
 ## [0.21.3] - 2026-09-15
 
 ### Fixed
