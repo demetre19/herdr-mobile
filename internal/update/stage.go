@@ -100,7 +100,7 @@ func prepareTargetReleaseFrom(
 	if err != nil {
 		return stagedRelease{}, fmt.Errorf("verify target release: %w", err)
 	}
-	if manifest.Version != job.TargetVersion || !strings.EqualFold(manifest.Revision, job.TargetRevision) {
+	if manifest.Version != job.TargetVersion || !revisionsMatch(manifest.Revision, job.TargetRevision) {
 		return stagedRelease{}, errors.New("target release identity does not match the advertised update")
 	}
 	if err := relayrelease.ValidateUpgradeCompatibility(current, manifest); err != nil {

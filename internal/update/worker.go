@@ -523,7 +523,7 @@ func verifyHealth(ctx context.Context, healthURL string, manifest relayrelease.M
 			if decodeErr == nil && response.StatusCode == http.StatusOK &&
 				health.Status == "ok" &&
 				health.ReleaseVersion == manifest.Version &&
-				strings.EqualFold(health.Revision, manifest.Revision) &&
+				revisionsMatch(health.Revision, manifest.Revision) &&
 				(manifest.WebHash == "" || strings.EqualFold(health.BundleHash, manifest.WebHash)) {
 				return nil
 			}

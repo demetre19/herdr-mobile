@@ -210,6 +210,84 @@ func TestManagerEligibilityRequiresReleasedBuild(t *testing.T) {
 	}
 }
 
+// Release binaries are stamped with the short commit SHA (the packaging
+// convention); that must still count as a released build and must reconcile
+// against the feed's full 40-char revision.
+func TestManagerEligibilityAcceptsShortRevision(t *testing.T) {
+	manager := &Manager{
+		version:  "1.2.3",
+		revision: "541c455",
+	}
+	if eligible, mode, reason := manager.eligibility(); !eligible || mode != "release" || reason != "" {
+		t.Fatalf("short-revision build rejected: eligible=%v mode=%q reason=%q", eligible, mode, reason)
+	}
+	manager.revision = "1.0.5-local"
+	if eligible, _, reason := manager.eligibility(); eligible || !strings.Contains(reason, "released") {
+		t.Fatalf("non-semver-style revision accepted: eligible=%v reason=%q", eligible, reason)
+	}
+}
+
+func TestRevisionsMatchShortAgainstFull(t *testing.T) {
+	full := "2e9509450235aaf34c2c215afc0880ed282643c8"
+	if !revisionsMatch("2e95094", full) {
+		t.Fatal("short revision did not match its full SHA")
+	}
+	if !revisionsMatch(full, "2E9509450235") {
+		t.Fatal("full revision did not match its 12-char prefix (case-insensitive)")
+	}
+	if !revisionsMatch(full, full) {
+		t.Fatal("identical revisions did not match")
+	}
+	if revisionsMatch("2e95094", "89abcdef0123456789abcdef0123456789abcdef") {
+		t.Fatal("different revisions matched")
+	}
+	if revisionsMatch("2e950", full) {
+		t.Fatal("sub-7-char prefix matched")
+	}
+	if revisionsMatch("", full) || revisionsMatch(full, "") {
+		t.Fatal("empty revision matched")
+	}
+}
+
+// A relay manually upgraded to the target version but stamped with the short
+// revision must reconcile the stale blocked state to current, with eligibility
+// recomputed from the running build — not copied from the stale state.
+func TestManagerBlockedStateReconcilesToCurrentWithShortRevision(t *testing.T) {
+	root := t.TempDir()
+	releaseRoot := filepath.Join(root, "installed")
+	runtimeDir := filepath.Join(root, "runtime")
+	if err := writeState(filepath.Join(runtimeDir, "update-state.json"), State{
+		State:             "blocked",
+		CurrentVersion:    "1.0.11",
+		CurrentRevision:   "541c455",
+		AvailableVersion:  "1.0.12",
+		AvailableRevision: shortRevision(nextTestRevision),
+		TargetVersion:     "1.0.12",
+		TargetRevision:    nextTestRevision,
+		Mode:              "unsupported",
+		Eligible:          false,
+		Reason:            "Managed updates require a released relay build",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewManager(
+		releaseRoot,
+		runtimeDir,
+		testHerdrBinary(t),
+		"1.0.12",
+		shortRevision(nextTestRevision),
+		"http://127.0.0.1:8375/healthz",
+	)
+	state := manager.loadState()
+	if state.State != "current" {
+		t.Fatalf("state = %q, want current", state.State)
+	}
+	if !state.Eligible || state.Mode != "release" {
+		t.Fatalf("eligibility not recomputed: eligible=%v mode=%q", state.Eligible, state.Mode)
+	}
+}
+
 func TestFetchReleaseRequiresExactTagCommit(t *testing.T) {
 	mux := http.NewServeMux()
 	server := httptest.NewServer(mux)

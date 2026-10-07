@@ -572,7 +572,7 @@ func (m *Manager) loadState() State {
 	if (transientUpdateState(state.State) ||
 		(state.State == "failed" && state.StartedAt != "")) &&
 		state.TargetVersion == m.version &&
-		strings.EqualFold(state.TargetRevision, m.revision) {
+		revisionsMatch(state.TargetRevision, m.revision) {
 		state.CanInstall = false
 		state.Eligible = true
 		state.Mode = "release"
@@ -597,6 +597,9 @@ func (m *Manager) loadState() State {
 			if upstreamRevision == "" {
 				upstreamRevision = state.TargetRevision
 			}
+			// Recompute, never copy: the stored mode/eligibility describe the
+			// build that wrote the state, not the one running now.
+			eligible, mode, _ := m.eligibility()
 			return State{
 				State:            "current",
 				CurrentVersion:   m.version,
@@ -605,8 +608,8 @@ func (m *Manager) loadState() State {
 				UpstreamRevision: upstreamRevision,
 				CheckedAt:        state.CheckedAt,
 				Target:           relayrelease.CurrentTarget(),
-				Mode:             state.Mode,
-				Eligible:         state.Eligible,
+				Mode:             mode,
+				Eligible:         eligible,
 			}
 		}
 	}
@@ -625,7 +628,7 @@ func (m *Manager) recoverOrphan(includeScheduled bool) {
 		return
 	}
 	if state.TargetVersion == m.version &&
-		strings.EqualFold(state.TargetRevision, m.revision) {
+		revisionsMatch(state.TargetRevision, m.revision) {
 		state.State = "succeeded"
 		state.CurrentVersion = m.version
 		state.CurrentRevision = m.revision
@@ -732,7 +735,10 @@ func transientUpdateState(value string) bool {
 }
 
 func validRevision(value string) bool {
-	if len(value) != 40 {
+	// Release binaries are stamped with the SHORT commit SHA (the packaging
+	// convention), while the release feed resolves full 40-char SHAs. Accept
+	// any git-style hex revision of 7-40 characters.
+	if len(value) < 7 || len(value) > 40 {
 		return false
 	}
 	for _, character := range value {
@@ -741,6 +747,25 @@ func validRevision(value string) bool {
 		}
 	}
 	return true
+}
+
+// revisionsMatch compares two git revisions case-insensitively, tolerating a
+// short SHA on either side: the running binary reports the short stamped
+// revision while the update feed and release manifests may carry the full
+// commit SHA for the same commit.
+func revisionsMatch(a, b string) bool {
+	a = strings.ToLower(strings.TrimSpace(a))
+	b = strings.ToLower(strings.TrimSpace(b))
+	if a == b {
+		return true
+	}
+	if len(a) < 7 || len(b) < 7 {
+		return false
+	}
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	return strings.HasPrefix(b, a)
 }
 
 func shortRevision(value string) string {
