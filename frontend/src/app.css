@@ -970,7 +970,8 @@ button.key-flash-error { background: color-mix(in srgb, var(--danger) 30%, var(-
 .ctrl-chord-popup button { align-items: center; background: var(--secondary); border: 0; border-radius: .4rem; color: var(--foreground); display: flex; gap: .6rem; justify-content: space-between; min-height: 2.3rem; padding: 0 .55rem; }
 .ctrl-chord-popup button kbd { font-size: .72rem; font-weight: 700; }
 .ctrl-chord-popup button span { color: var(--muted); font-size: .68rem; }
-.ctrl-chord-popup header { color: var(--muted); font-size: .58rem; font-weight: 700; letter-spacing: .06em; padding: .1rem .3rem 0; text-transform: uppercase; }
+.ctrl-chord-popup header { align-items: center; color: var(--muted); display: flex; font-size: .58rem; font-weight: 700; justify-content: space-between; letter-spacing: .06em; padding: .1rem .3rem 0; text-transform: uppercase; }
+.ctrl-chord-popup .ctrl-chord-close { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: .8rem; line-height: 1; min-height: 1.6rem; min-width: 1.6rem; padding: 0; }
 /* Question-mode keys render outside .terminal-bottom, so popups there anchor
    to this strip pinned to the bottom of the question main. */
 .question-popups { bottom: 0; left: 0; position: absolute; right: 0; }

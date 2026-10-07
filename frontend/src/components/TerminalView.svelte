@@ -1945,7 +1945,6 @@
     if (readOnly) return;
     arrowsOpen = false;
     fkeysOpen = false;
-    ctrlChordMenuOpen = false;
     if (which === 'ctrl') ctrlArmed = !ctrlArmed;
     else if (which === 'alt') altArmed = !altArmed;
     else shiftArmed = !shiftArmed;
@@ -1955,10 +1954,6 @@
     } else {
       modifierInputElement.blur();
     }
-  }
-
-  function toggleCtrl() {
-    toggleModifier('ctrl');
   }
 
   function toggleAlt() {
@@ -2012,20 +2007,36 @@
   const chordSet = $derived(agentChords(agent.agent));
   let ctrlChordMenuOpen = $state(false);
 
+  // The ^ button keeps its old press behavior — tap to arm Ctrl, tap again
+  // to disarm — and additionally opens the chord popup. The popup is
+  // PERSISTENT: chord rows send without closing it, so a pager's double
+  // Ctrl+C is two taps, not reopen-the-menu-every-time. Close with ^, the
+  // ✕ in the popup header, or Escape in the capture field.
   function toggleCtrlMenu() {
-    ctrlChordMenuOpen = !ctrlChordMenuOpen;
-    fkeysOpen = false;
-    arrowsOpen = false;
+    const opening = !ctrlChordMenuOpen;
+    ctrlChordMenuOpen = opening;
+    if (opening) {
+      fkeysOpen = false;
+      arrowsOpen = false;
+      if (!ctrlArmed) toggleModifier('ctrl');
+      else { modifierInputElement.value = ''; modifierInputElement.focus(); }
+    } else {
+      disarmModifiers();
+    }
+  }
+
+  function closeCtrlMenu() {
+    ctrlChordMenuOpen = false;
+    disarmModifiers();
   }
 
   function sendCtrlChord(keys: string[], label: string) {
-    ctrlChordMenuOpen = false;
     void sendKeys(keys, label, 'ctrl');
   }
 
   function armCtrlFromMenu() {
-    ctrlChordMenuOpen = false;
-    toggleModifier('ctrl');
+    if (!ctrlArmed) toggleModifier('ctrl');
+    modifierInputElement.value = '';
     modifierInputElement.focus();
   }
 
@@ -2038,6 +2049,7 @@
   function modifierKeydown(event: KeyboardEvent) {
     if (event.key !== 'Escape') return;
     event.preventDefault();
+    ctrlChordMenuOpen = false;
     disarmModifiers();
   }
 
@@ -2811,7 +2823,10 @@
 {#snippet ctrlChordPopup()}
   {#if ctrlChordMenuOpen}
     <div class="ctrl-chord-popup" role="menu" aria-label="{chordSet.title} chords">
-      <header>{chordSet.title}</header>
+      <header>
+        <span>{chordSet.title}</span>
+        <button class="ctrl-chord-close" aria-label="Close chords" onpointerdown={(event) => event.preventDefault()} onclick={closeCtrlMenu}>✕</button>
+      </header>
       {#each chordSet.chords as chord (chord.keys.join('+'))}
         <button
           role="menuitem"
