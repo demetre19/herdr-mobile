@@ -620,3 +620,40 @@ func TestSweepDropsAnUnresolvablePane(t *testing.T) {
 		t.Fatalf("second SweepExpired() error = %v", err)
 	}
 }
+
+// A harness-spawned agent detaches from the pane tty: ps prints 'stdin' for
+// the process-group leader. The lease must still land — walk the foreground
+// list until a process reports a real device.
+func TestAcquireFallsBackToForegroundTty(t *testing.T) {
+	now := time.Unix(900, 0)
+	provider := &fakeProcessInfoProvider{infos: map[string]*herdr.PaneProcessInfo{
+		"pane-1": {
+			PaneID:                   "pane-1",
+			ForegroundProcessGroupID: 901,
+			ForegroundProcesses: []herdr.PaneProcess{
+				{PID: 901, Name: "omp"},
+				{PID: 902, Name: "pi"},
+			},
+		},
+	}}
+	runner := &fakeCommandRunner{
+		// ps answers 'stdin' for the leader and a real tty for the sibling.
+		ttyByPID: map[int]string{901: "stdin", 902: "pts/9"},
+		sizes:    map[string]terminalSize{"/dev/pts/9": {rows: 30, columns: 120}},
+	}
+	manager := testManager(provider, runner, func() time.Time { return now })
+
+	columns, _, err := manager.Acquire(context.Background(), "client-a", "pane-1", 80, 0)
+	if err != nil {
+		t.Fatalf("Acquire() error = %v, want nil (sibling tty is resolvable)", err)
+	}
+	if columns != 80 {
+		t.Fatalf("Acquire() columns = %d, want 80", columns)
+	}
+	if got := runner.sizes["/dev/pts/9"]; got.columns != 80 {
+		t.Fatalf("sibling tty size = %+v, want 80 columns", got)
+	}
+	if manager.panes["pane-1"].tty != "/dev/pts/9" {
+		t.Fatalf("cached tty = %q, want the sibling's /dev/pts/9", manager.panes["pane-1"].tty)
+	}
+}

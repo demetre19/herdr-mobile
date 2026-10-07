@@ -86,8 +86,8 @@ type paneState struct {
 	// consecutive stty write failures; a pane whose resolved PTY is wedged
 	// (recycled or renumbered) accumulates these, and callers can decide the
 	// entry is unrecoverable instead of retrying the dead path forever.
-	sttyFailures    int
-	leases          map[string]Lease
+	sttyFailures int
+	leases       map[string]Lease
 }
 
 type Manager struct {
@@ -442,17 +442,26 @@ func (m *Manager) resolvePane(ctx context.Context, paneID string) (*paneState, e
 	if err != nil {
 		return nil, ErrProcessUnavailable
 	}
-	pid, err := foregroundPID(info, paneID)
+	pids, err := foregroundPIDs(info, paneID)
 	if err != nil {
 		return nil, err
 	}
-	output, err := m.runner.Output(ctx, "ps", "-o", "tty=", "-p", strconv.Itoa(pid))
-	if err != nil {
+	// The process-group leader is not always the tty owner: harness-spawned
+	// agents detach from the pane tty (their ps tty reads 'stdin'/'??'), so
+	// walk every foreground process until one resolves to a real device.
+	var tty string
+	for _, pid := range pids {
+		output, psErr := m.runner.Output(ctx, "ps", "-o", "tty=", "-p", strconv.Itoa(pid))
+		if psErr != nil {
+			continue
+		}
+		if resolved, ttyErr := ttyPath(output); ttyErr == nil {
+			tty = resolved
+			break
+		}
+	}
+	if tty == "" {
 		return nil, ErrTTYUnavailable
-	}
-	tty, err := ttyPath(output)
-	if err != nil {
-		return nil, err
 	}
 	size, err := m.readSize(ctx, tty)
 	if err != nil {
@@ -468,22 +477,31 @@ func (m *Manager) resolvePane(ctx context.Context, paneID string) (*paneState, e
 	}, nil
 }
 
-func foregroundPID(info *herdr.PaneProcessInfo, paneID string) (int, error) {
+func foregroundPIDs(info *herdr.PaneProcessInfo, paneID string) ([]int, error) {
 	if info == nil || info.PaneID == "" || info.PaneID != paneID ||
 		info.ForegroundProcessGroupID <= 0 || len(info.ForegroundProcesses) == 0 {
-		return 0, ErrProcessUnavailable
+		return nil, ErrProcessUnavailable
+	}
+	pids := make([]int, 0, len(info.ForegroundProcesses))
+	seen := make(map[int]bool, len(info.ForegroundProcesses))
+	for _, process := range info.ForegroundProcesses {
+		if process.PID != info.ForegroundProcessGroupID {
+			continue
+		}
+		seen[process.PID] = true
+		pids = append(pids, process.PID)
 	}
 	for _, process := range info.ForegroundProcesses {
-		if process.PID == info.ForegroundProcessGroupID {
-			return process.PID, nil
+		if process.PID <= 0 || seen[process.PID] {
+			continue
 		}
+		seen[process.PID] = true
+		pids = append(pids, process.PID)
 	}
-	for _, process := range info.ForegroundProcesses {
-		if process.PID > 0 {
-			return process.PID, nil
-		}
+	if len(pids) == 0 {
+		return nil, ErrProcessUnavailable
 	}
-	return 0, ErrProcessUnavailable
+	return pids, nil
 }
 
 type terminalSize struct {
@@ -543,7 +561,14 @@ func ttyPath(output []byte) (string, error) {
 	if len(fields) != 1 || fields[0] == "?" || fields[0] == "??" || fields[0] == "-" {
 		return "", ErrTTYUnavailable
 	}
+	// 'stdin'/'stdout' style entries are not pane devices: detaching a process
+	// makes ps print them, and /dev/stdin inside the detached relay service
+	// resolves to /dev/null — which stty silently accepts, so the lease looks
+	// applied while the real pane never resizes.
 	tty := strings.TrimPrefix(fields[0], "/dev/")
+	if tty == "stdin" || tty == "stdout" || tty == "stderr" || tty == "notty" {
+		return "", ErrTTYUnavailable
+	}
 	if tty == "" || filepath.IsAbs(tty) {
 		return "", ErrTTYUnavailable
 	}
@@ -690,4 +715,3 @@ func (m *Manager) paneGone(ctx context.Context, paneID string) bool {
 	_, err := m.resolvePane(ctx, paneID)
 	return err != nil
 }
-
