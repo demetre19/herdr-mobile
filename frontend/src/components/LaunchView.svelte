@@ -113,12 +113,15 @@
     const loadConnection = connection;
     const generation = ++directoryLoadGeneration;
     if (!loadRelayId || !loadConnection?.capabilities.includes('directory_browser')) return;
-    directoryQuery = '';
+    // Stay open while drilling: collapsing after every navigation forced the
+    // filter to be re-opened at each level. A path-like query has landed
+    // (clear it); a plain filter word keeps filtering the new listing.
+    if (directoryQuery.includes('/') || directoryQuery.trim() === '~') directoryQuery = '';
     directoryNotice = '';
     try {
       const listing = await relayStore.listDirectories(loadRelayId, path);
       if (generation !== directoryLoadGeneration || relayId !== loadRelayId) return;
-      directoryOpen = false;
+      directoryOpen = true;
       cwd = listing.current.path;
       directoryRelayId = loadRelayId;
       name = suggestedLaunchName(cwd, profileId);

@@ -166,7 +166,9 @@
     const path = expandHome(rawPath);
     const loadRelayId = relayId;
     const generation = ++directoryLoadGeneration;
-    directoryQuery = '';
+    // A path-like query has landed (clear it); a plain filter word keeps
+    // filtering the new listing so drilling through folders keeps the filter.
+    if (directoryQuery.includes('/') || directoryQuery.trim() === '~') directoryQuery = '';
     directoryNotice = '';
     if (!loadRelayId || !connection?.capabilities.includes('directory_browser')) return;
     try {
