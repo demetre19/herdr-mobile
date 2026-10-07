@@ -98,6 +98,10 @@
   let beginningReached = $state(false);
   let pausedReason = $state('');
   let latestGapOutstanding = $state(false);
+  // Set by requestLatest: after the latest page loads, land on the START of
+  // the newest message (its header at the viewport top) instead of the very
+  // bottom — you read the new answer from the beginning, not its tail.
+  let landAtLatestStart = false;
   let preparationPolls = $state(0);
   let requestPhase = $state<'idle' | 'initial' | 'refresh' | 'older' | 'preparing'>('initial');
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
@@ -250,6 +254,26 @@
       cancelAnimationFrame(firstFrame);
       if (secondFrame) cancelAnimationFrame(secondFrame);
     };
+  });
+
+  // requestLatest lands on the START of the newest message, not the bottom:
+  // the reader wants to read the new answer from its header, not arrive at
+  // its tail. Runs once per requestLatest, after the refreshed page lays out.
+  $effect(() => {
+    const list = listElement;
+    if (!landAtLatestStart || !list || !mounted || historyBusy || !entries.length) return;
+    const frame = requestAnimationFrame(() => {
+      if (!landAtLatestStart || list !== listElement) return;
+      const last = list.querySelector('.conversation-entry:last-of-type');
+      if (last) {
+        const top = last.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+        pinnedToBottom = false;
+        list.scrollTop = Math.max(0, top);
+        lastScrollTop = list.scrollTop;
+      }
+      landAtLatestStart = false;
+    });
+    return () => cancelAnimationFrame(frame);
   });
 
   // The loader lives inside the scroll box. A positive top margin makes the
@@ -415,6 +439,7 @@
 
   function requestLatest() {
     sourceChangedNotice = '';
+    landAtLatestStart = true;
     historyController?.returnToLatest();
   }
 

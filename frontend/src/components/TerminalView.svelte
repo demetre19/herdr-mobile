@@ -120,6 +120,8 @@
     keys?: string[];
     text?: string;
     label: string;
+    /** Key-row button to flash while this command is in flight. */
+    flashId?: string;
     resolve: (sent: boolean) => void;
   }
   let terminalElement = $state<HTMLDivElement>(null!);
@@ -233,8 +235,8 @@
   let directInput = $state(false);
   let directComposing = false;
   let directBackspaceAt = 0;
-  let keyFeedback = $state('');
-  let keyFeedbackError = $state(false);
+  let keyFlashId = $state('');
+  let keyFlashError = $state(false);
   let keyRequestSending = $state(false);
   let sendingFilter = $state(false);
   const keySending = $derived(keyRequestSending || sendingFilter);
@@ -316,7 +318,7 @@
   let paneVisibilityChanged: (() => void) | null = null;
   let paneLocked = false;
   const keyQueue: QueuedKeyCommand[] = [];
-  let keyFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let keyFlashTimer: ReturnType<typeof setTimeout> | undefined;
   let keyReadTimer: ReturnType<typeof setTimeout> | undefined;
 
   const responsePending = $derived(agentNeedsResponse(agent));
@@ -392,14 +394,6 @@
     offsets: terminalRowOffsets(renderedRows),
   }));
   const terminalFind = $derived(findTerminalText(terminalFindCorpus.text, findQuery.trim()));
-  const armedModifierLabel = $derived([
-    ctrlArmed ? 'Ctrl' : '',
-    altArmed ? 'Alt' : '',
-    shiftArmed ? 'Shift' : '',
-  ].filter(Boolean).join('+'));
-  const keyControlStatus = $derived(armedModifierLabel
-    ? `${armedModifierLabel} armed${keyFeedback ? ` · ${keyFeedback}` : ' — choose a key or type a character'}`
-    : keyFeedback);
   const agentResponseCopySupported = $derived.by(() => {
     const connection = $connections.get(agent.relay_id);
     return Boolean(
@@ -823,7 +817,7 @@
       window.removeEventListener('keydown', findShortcut);
       clearInterval(refresh);
       clearInterval(refreshPaneSizeLease);
-      if (keyFeedbackTimer) clearTimeout(keyFeedbackTimer);
+      if (keyFlashTimer) clearTimeout(keyFlashTimer);
       if (keyReadTimer) clearTimeout(keyReadTimer);
       for (const command of keyQueue.splice(0)) command.resolve(false);
       relayStore.unwatchPane(agent);
@@ -1582,7 +1576,7 @@
       } else {
         await relayStore.sendToAgent(target, { type: 'submit_prompt', text });
       }
-      relayStore.showToast(terminalText === 'filter' ? 'Filter text sent. Select separately using terminal controls.' : terminalText ? 'Terminal text submitted.' : 'Prompt sent.');
+      if (terminalText === 'filter') relayStore.showToast('Filter text sent. Select separately using terminal controls.');
     } catch (error) {
       const dispatchedUnknown = typeof error === 'object'
         && error !== null
@@ -1727,10 +1721,13 @@
     }
   }
 
-  function sendKeys(keys: string[], activityLabel = ''): Promise<boolean> {
+  function sendKeys(keys: string[], activityLabel = '', flashId = ''): Promise<boolean> {
     if (readOnly || sendingFilter) return Promise.resolve(false);
+    // Acknowledge the tap immediately — the flash is the feedback, not the
+    // (layout-shifting) status bar.
+    if (flashId) flashKey(flashId);
     return new Promise((resolve) => {
-      keyQueue.push({ keys, label: activityLabel || keys.join(', '), resolve });
+      keyQueue.push({ keys, label: activityLabel || keys.join(', '), flashId: flashId || undefined, resolve });
       void drainKeyQueue();
     });
   }
@@ -1740,7 +1737,6 @@
     keyRequestSending = true;
     while (keyQueue.length) {
       const command = keyQueue.shift()!;
-      if (command.label) showKeyFeedback(`Sending ${command.label}…`);
       try {
         if (command.kind === 'input') {
           await relayStore.sendToAgent(agent, {
@@ -1763,7 +1759,6 @@
           });
         }
         command.resolve(true);
-        if (command.label) showKeyFeedback(`${command.label} sent`);
         if (keyReadTimer) clearTimeout(keyReadTimer);
         keyReadTimer = setTimeout(() => {
           if (componentMounted) relayStore.readPane(agent);
@@ -1771,7 +1766,7 @@
       } catch (error) {
         command.resolve(false);
         const message = error instanceof Error ? error.message : 'Terminal keys could not be sent.';
-        showKeyFeedback('Key send failed', true);
+        if (command.flashId) flashKey(command.flashId, true);
         relayStore.showToast(message, true);
         for (const queued of keyQueue.splice(0)) queued.resolve(false);
       }
@@ -1779,15 +1774,19 @@
     keyRequestSending = false;
   }
 
-  function showKeyFeedback(message: string, error = false) {
+  function flashKey(id: string, error = false) {
     if (!componentMounted) return;
-    if (keyFeedbackTimer) clearTimeout(keyFeedbackTimer);
-    keyFeedback = message;
-    keyFeedbackError = error;
-    keyFeedbackTimer = setTimeout(() => {
-      keyFeedback = '';
-      keyFeedbackError = false;
-    }, 2_000);
+    if (keyFlashTimer) clearTimeout(keyFlashTimer);
+    keyFlashId = id;
+    keyFlashError = error;
+    keyFlashTimer = setTimeout(() => {
+      keyFlashId = '';
+      keyFlashError = false;
+    }, error ? 900 : 420);
+  }
+
+  function flashClass(id: string): string {
+    return keyFlashId === id ? `key-flash${keyFlashError ? ' key-flash-error' : ''}` : '';
   }
 
   let fetchingSpeechText = $state(false);
@@ -1996,13 +1995,13 @@
     sendTerminalKey(character);
   }
 
-  function sendTerminalKey(key: string, plainLabel = key) {
+  function sendTerminalKey(key: string, plainLabel = key, flashId = '') {
     const result = modifierChord(key);
-    void sendKeys([result?.chord || key], result?.label || plainLabel);
+    void sendKeys([result?.chord || key], result?.label || plainLabel, flashId);
   }
 
   function sendTab() {
-    sendTerminalKey('Tab');
+    sendTerminalKey('Tab', 'Tab', 'tab');
   }
 
   // Tap ^ opens a chord menu (same pattern as the arrow/F-key pads): the
@@ -2020,7 +2019,7 @@
 
   function sendCtrlChord(keys: string[], label: string) {
     ctrlChordMenuOpen = false;
-    void sendKeys(keys, label);
+    void sendKeys(keys, label, 'ctrl');
   }
 
   function armCtrlFromMenu() {
@@ -2032,7 +2031,7 @@
   function sendFunctionKey(number: number) {
     fkeysOpen = false;
     // Herdr parses function keys as f1..f24; the label keeps the pad readable.
-    sendTerminalKey(`f${number}`, `F${number}`);
+    sendTerminalKey(`f${number}`, `F${number}`, 'fkeys');
   }
 
   function modifierKeydown(event: KeyboardEvent) {
@@ -2782,13 +2781,13 @@
   {#if arrowsOpen}
     <div class="arrow-popup">
       <span aria-hidden="true"></span>
-      <button disabled={readOnly || keySending} aria-label="Up" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Up')}>↑</button>
+      <button class={flashClass('up')} disabled={readOnly} aria-label="Up" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Up', 'Up', 'up')}>↑</button>
       <span aria-hidden="true"></span>
-      <button disabled={readOnly || keySending} aria-label="Left" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Left')}>←</button>
+      <button class={flashClass('left')} disabled={readOnly} aria-label="Left" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Left', 'Left', 'left')}>←</button>
       <span aria-hidden="true"></span>
-      <button disabled={readOnly || keySending} aria-label="Right" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Right')}>→</button>
+      <button class={flashClass('right')} disabled={readOnly} aria-label="Right" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Right', 'Right', 'right')}>→</button>
       <span aria-hidden="true"></span>
-      <button disabled={readOnly || keySending} aria-label="Down" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Down')}>↓</button>
+      <button class={flashClass('down')} disabled={readOnly} aria-label="Down" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Down', 'Down', 'down')}>↓</button>
       <span aria-hidden="true"></span>
     </div>
   {/if}
@@ -2799,7 +2798,7 @@
     <div class="fkey-popup" role="group" aria-label="Function keys">
       {#each FUNCTION_KEYS as number (number)}
         <button
-          disabled={readOnly || keySending}
+          disabled={readOnly}
           onpointerdown={(event) => event.preventDefault()}
           onclick={() => sendFunctionKey(number)}
         >F{number}</button>
@@ -2815,14 +2814,14 @@
       {#each chordSet.chords as chord (chord.keys.join('+'))}
         <button
           role="menuitem"
-          disabled={readOnly || keySending}
+          disabled={readOnly}
           onpointerdown={(event) => event.preventDefault()}
           onclick={() => sendCtrlChord(chord.keys, chord.label)}
         ><kbd>{chord.label}</kbd><span>{chord.hint}</span></button>
       {/each}
       <button
         role="menuitem"
-        disabled={readOnly || keySending}
+        disabled={readOnly}
         onpointerdown={(event) => event.preventDefault()}
         onclick={armCtrlFromMenu}
       ><kbd>^ _</kbd><span>Arm Ctrl, type any key</span></button>
@@ -2843,14 +2842,11 @@
   {/if}
   {#if questionMode && interaction}
     <QuestionForm {agent} {interaction} responding={responding.has(agent.pane_id)} />
-    {#if keyControlStatus}
-      <p class:error={keyFeedbackError} class="key-feedback" role="status" aria-live="polite">{keyControlStatus}</p>
-    {/if}
     <div class="term-keys question-term-keys" aria-label="Terminal fallback keys" aria-busy={keySending}>
-      <Button variant="secondary" size="sm" onclick={() => sendTerminalKey('Escape', 'Cancelled prompt')}>Esc</Button>
-      <Button variant="secondary" size="sm" aria-label="Tab" title="Send Tab" onclick={sendTab}>{@render tabIcon()}</Button>
+      <Button variant="secondary" size="sm" class={flashClass('esc')} onclick={() => sendTerminalKey('Escape', 'Cancelled prompt', 'esc')}>Esc</Button>
+      <Button variant="secondary" size="sm" class={flashClass('tab')} aria-label="Tab" title="Send Tab" onclick={sendTab}>{@render tabIcon()}</Button>
       <div class="fkey-menu">
-        <Button variant="secondary" size="sm" aria-label="Function keys" aria-expanded={fkeysOpen} onclick={() => { fkeysOpen = !fkeysOpen; arrowsOpen = false; }}>
+        <Button variant="secondary" size="sm" class={flashClass('fkeys')} aria-label="Function keys" aria-expanded={fkeysOpen} onclick={() => { fkeysOpen = !fkeysOpen; arrowsOpen = false; }}>
           F keys
         </Button>
       </div>
@@ -2859,7 +2855,7 @@
           {@render arrowIcon()}
         </Button>
       </div>
-      <Button variant="secondary" size="sm" aria-label="Enter" onclick={() => sendTerminalKey('Enter')}>Enter</Button>
+      <Button variant="secondary" size="sm" class={flashClass('enter')} aria-label="Enter" onclick={() => sendTerminalKey('Enter', 'Enter', 'enter')}>Enter</Button>
     </div>
   {/if}
   {#if questionMode && interaction}
@@ -3255,7 +3251,7 @@
             <Button
               variant={action.cancel ? 'secondary' : 'default'}
               size="sm"
-              disabled={readOnly || keySending}
+              disabled={readOnly}
               aria-label={action.label}
               onclick={() => { void sendKeys(action.keys, action.label); }}
             >{#if action.keys.length === 1 && action.keys[0] === 'Up'}{@render arrowUpIcon()}{:else if action.keys.length === 1 && action.keys[0] === 'Down'}{@render arrowDownIcon()}{:else if action.keys.length === 1 && action.keys[0] === 'Left'}{@render arrowLeftIcon()}{:else if action.keys.length === 1 && action.keys[0] === 'Right'}{@render arrowRightIcon()}{:else}<kbd>{menuKeyLabel(action.keys)}</kbd>{action.label}{/if}</Button>
@@ -3278,12 +3274,9 @@
       <div class="quick-actions"><Button variant="secondary" onclick={openNext}>Next blocked →</Button></div>
     {/if}
 
-    {#if keyControlStatus}
-      <p class:error={keyFeedbackError} class="key-feedback" role="status" aria-live="polite">{keyControlStatus}</p>
-    {/if}
     <div class="term-keys" aria-busy={keySending}>
-      <Button variant="secondary" size="sm" disabled={readOnly || keySending} onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Escape', 'Cancelled prompt')}>Esc</Button>
-      <Button variant="secondary" size="sm" disabled={readOnly || keySending} aria-label="Tab" title="Send Tab" onpointerdown={(event) => event.preventDefault()} onclick={sendTab}>{@render tabIcon()}</Button>
+      <Button variant="secondary" size="sm" disabled={readOnly} class={flashClass('esc')} onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Escape', 'Cancelled prompt', 'esc')}>Esc</Button>
+      <Button variant="secondary" size="sm" disabled={readOnly} class={flashClass('tab')} aria-label="Tab" title="Send Tab" onpointerdown={(event) => event.preventDefault()} onclick={sendTab}>{@render tabIcon()}</Button>
       <div class="modifier-menu">
         <input
           id="modifier-key-input"
@@ -3302,7 +3295,7 @@
         <Button
           variant="secondary"
           size="sm"
-          disabled={readOnly || keySending}
+          disabled={readOnly}
           aria-controls="modifier-key-input"
           aria-pressed={shiftArmed}
           aria-label="Shift"
@@ -3313,7 +3306,8 @@
         <Button
           variant="secondary"
           size="sm"
-          disabled={readOnly || keySending}
+          disabled={readOnly}
+          class={flashClass('ctrl')}
           aria-controls="modifier-key-input"
           aria-pressed={ctrlArmed}
           aria-expanded={ctrlChordMenuOpen}
@@ -3325,7 +3319,7 @@
         <Button
           variant="secondary"
           size="sm"
-          disabled={readOnly || keySending}
+          disabled={readOnly}
           aria-controls="modifier-key-input"
           aria-pressed={altArmed}
           title="Arm Alt; combine it with Ctrl or Shift"
@@ -3337,7 +3331,8 @@
         <Button
           variant="secondary"
           size="sm"
-          disabled={readOnly || keySending}
+          disabled={readOnly}
+          class={flashClass('fkeys')}
           aria-label="Function keys"
           aria-expanded={fkeysOpen}
           onpointerdown={(event) => event.preventDefault()}
@@ -3348,7 +3343,7 @@
         <Button
           variant="secondary"
           size="sm"
-          disabled={readOnly || keySending}
+          disabled={readOnly}
           aria-label="Arrow keys"
           aria-expanded={arrowsOpen}
           onpointerdown={(event) => event.preventDefault()}
@@ -3358,7 +3353,7 @@
         </Button>
       </div>
       <Button variant="secondary" size="sm" disabled={readOnly || keySending || sendingPrompt} aria-label="Ctrl+Enter — queue the typed follow-up" title="Queue the typed text (Ctrl+Enter)" onpointerdown={(event) => event.preventDefault()} onclick={() => { void sendCtrlEnter(); }}>{@render queueIcon()}</Button>
-      <Button variant="secondary" size="sm" disabled={readOnly || keySending} aria-label="Enter" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Enter')}>Enter</Button>
+      <Button variant="secondary" size="sm" disabled={readOnly} class={flashClass('enter')} aria-label="Enter" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Enter', 'Enter', 'enter')}>Enter</Button>
     </div>
 
     <!-- Popups live outside the scrollable .term-keys: overflow-x:auto would

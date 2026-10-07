@@ -942,6 +942,10 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .term-keys .spacer { flex: 1 0 auto; min-width: .5rem; }
 .key-feedback { background: color-mix(in srgb, var(--primary) 10%, var(--background)); border-top: 1px solid var(--border); color: var(--muted); font-size: .66rem; margin: 0; min-height: 1.55rem; padding: .35rem .65rem; }
 .key-feedback.error { color: var(--danger); }
+/* In-key send feedback: the tapped key pulses instead of a status bar that
+   shifts the layout. Error holds longer and reads red. */
+button.key-flash { background: color-mix(in srgb, var(--primary) 26%, var(--background)) !important; }
+button.key-flash-error { background: color-mix(in srgb, var(--danger) 30%, var(--background)) !important; }
 .modifier-menu, .arrow-menu, .fkey-menu { position: relative; }
 .modifier-key-input { border: 0; height: 1px; left: 50%; opacity: 0; padding: 0; pointer-events: none; position: absolute; width: 1px; }
 .modifier-menu .button[aria-pressed='true'] { background: var(--primary); color: var(--primary-foreground); }
