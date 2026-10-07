@@ -46,6 +46,7 @@
   } from '$lib/speech';
   import { interfaceSize, terminalHeightLease, theme } from '$lib/preferences';
   import { cachedPaneSize, storePaneSize, stabilizePaneSize } from '$lib/pane-size-cache';
+  import { agentChords } from '$lib/agent-chords';
   import { replaceView } from '$lib/router';
   import { targetRefForAgent, targetRefMatchesAgent } from '$lib/resource-id';
   import { securityState } from '$lib/security';
@@ -2005,15 +2006,10 @@
   }
 
   // Tap ^ opens a chord menu (same pattern as the arrow/F-key pads): the
-  // common control chords go out directly through send_keys, no soft-keyboard
-  // round trip. 'Arm Ctrl' keeps the old type-any-key chord flow reachable.
-  const CTRL_CHORD_MENU: { keys: string[]; label: string; hint: string }[] = [
-    { keys: ['ctrl+c'], label: 'Ctrl+C', hint: 'Interrupt' },
-    { keys: ['ctrl+d'], label: 'Ctrl+D', hint: 'EOF / exit' },
-    { keys: ['ctrl+z'], label: 'Ctrl+Z', hint: 'Suspend' },
-    { keys: ['ctrl+l'], label: 'Ctrl+L', hint: 'Clear screen' },
-    { keys: ['ctrl+r'], label: 'Ctrl+R', hint: 'Search history' },
-  ];
+  // pane's own agent leads with its most useful chord (OMP's Ctrl+P role
+  // switcher, Claude's Esc interrupt, …), universal control chords follow.
+  // 'Arm Ctrl' keeps the old type-any-key chord flow reachable.
+  const chordSet = $derived(agentChords(agent.agent));
   let ctrlChordMenuOpen = $state(false);
 
   function toggleCtrlMenu() {
@@ -2814,8 +2810,9 @@
 
 {#snippet ctrlChordPopup()}
   {#if ctrlChordMenuOpen}
-    <div class="ctrl-chord-popup" role="menu" aria-label="Common Ctrl chords">
-      {#each CTRL_CHORD_MENU as chord (chord.keys.join('+'))}
+    <div class="ctrl-chord-popup" role="menu" aria-label="{chordSet.title} chords">
+      <header>{chordSet.title}</header>
+      {#each chordSet.chords as chord (chord.keys.join('+'))}
         <button
           role="menuitem"
           disabled={readOnly || keySending}
