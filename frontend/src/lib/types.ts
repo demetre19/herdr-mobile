@@ -610,6 +610,8 @@ export interface ToastMessage {
   id: number;
   message: string;
   error: boolean;
+  /** Auto-dismiss ms; the Toast component defaults to 4000 when omitted. */
+  duration?: number;
 }
 
 export interface QuestionDraft {

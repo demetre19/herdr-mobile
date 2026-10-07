@@ -1631,9 +1631,10 @@
   function toggleWideView() {
     wideView = !wideView;
     requestPaneSizeLease(true);
+    // Short-lived: the toast overlays the key row, so it must clear fast.
     relayStore.showToast(wideView
       ? 'Wide view: pane leased at 240 columns. Swipe sideways to pan.'
-      : 'Wide view off.');
+      : 'Wide view off.', false, 1_500);
   }
 
   async function submitSecret() {

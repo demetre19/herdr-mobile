@@ -3099,8 +3099,8 @@ class RelayStore {
     return this.connectionsValue.get(relayId);
   }
 
-  showToast(message: string, error = false): void {
-    this.toast.set({ id: ++this.toastId, message, error });
+  showToast(message: string, error = false, duration = 4_000): void {
+    this.toast.set({ id: ++this.toastId, message, error, duration });
   }
 
   private emitConnections(): void {

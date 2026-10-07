@@ -22,7 +22,7 @@
           if (element?.matches(':popover-open')) element.hidePopover();
         }, 150);
       }
-    }, 4_000);
+    }, $toast.duration ?? 4_000);
     return () => {
       if (timer) clearTimeout(timer);
       if (hideTimer) clearTimeout(hideTimer);
