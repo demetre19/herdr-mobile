@@ -547,6 +547,9 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .directory-list p { color: var(--muted); font-size: .75rem; margin: 0; padding: .8rem; }
 .directory-search { background: var(--input); border: 0; border-bottom: 1px solid var(--border); color: var(--foreground); font: inherit; padding: .6rem .7rem; }
 .directory-notice { color: var(--warning) !important; }
+.directory-refreshing { opacity: .55; }
+.directory-refreshing button { pointer-events: none; }
+.directory-loading-note { color: var(--muted) !important; font-style: italic; }
 
 .activity-toolbar { align-items: center; display: flex; gap: .75rem; justify-content: space-between; margin-bottom: .8rem; }
 .activity-toolbar h2 { margin: 0; }

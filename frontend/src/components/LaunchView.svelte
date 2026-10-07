@@ -275,11 +275,16 @@
           <div id="launch-directory-list" class="directory-list" aria-label="Subdirectories">
             {#if !connection?.capabilities.includes('directory_browser')}
               <p>Update and restart this computer’s relay to browse directories.</p>
-            {:else if connection.directoryLoading}
+            {:else if connection.directoryLoading && !connection.directoryBrowser}
               <p>Loading folders…</p>
             {:else if connection.directoryError}
               <p role="alert">{connection.directoryError}</p>
             {:else}
+              <!-- Keep the live listing mounted while a drill-down fetches:
+                   swapping in a placeholder mid-tap looked like the browser
+                   jumped back to home. -->
+              <div class:directory-refreshing={connection.directoryLoading}
+                   aria-busy={connection.directoryLoading || undefined}>
               <input
                 class="directory-search"
                 type="search"
@@ -301,6 +306,8 @@
               {#if connection?.directoryBrowser && !filteredDirectories.length}
                 <p>{directoryQuery.trim() ? 'No folders match.' : 'This folder has no subdirectories. It remains selected.'}</p>
               {/if}
+              {#if connection.directoryLoading}<p class="directory-loading-note" role="status">Loading folders…</p>{/if}
+              </div>
             {/if}
           </div>
         {/if}
