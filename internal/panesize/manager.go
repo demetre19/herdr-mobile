@@ -197,8 +197,7 @@ func (m *Manager) Acquire(
 
 	previous, hadPrevious := state.leases[clientID]
 	state.leases[clientID] = Lease{Columns: columns, Rows: rows, ExpiresAt: now.Add(m.ttl)}
-	targetColumns, _ := minimumColumns(state.leases)
-	targetRows := minimumRows(state.leases)
+	targetColumns, targetRows := desiredPaneSize(state.leases)
 	constrainedRows := targetRows > 0
 	if !constrainedRows {
 		targetRows = state.baselineRows
@@ -589,6 +588,37 @@ func minimumColumns(leases map[string]Lease) (int, bool) {
 	return minimum, minimum != 0
 }
 
+// desiredPaneSize picks the pane size from the lease set. Normally the
+// narrowest lease wins so a second viewer never loses columns; but a lease
+// at MaxColumns is the viewer asking for a WIDE rendering on purpose — it
+// cannot be satisfied by narrowing, so it overrides the minimum. Rows follow
+// the lease that asked for the wide view.
+func desiredPaneSize(leases map[string]Lease) (int, int) {
+	wideRows := 0
+	for _, lease := range leases {
+		if lease.Columns >= MaxColumns {
+			if wideRows == 0 || (lease.Rows > 0 && lease.Rows < wideRows) {
+				wideRows = lease.Rows
+			}
+		}
+	}
+	if wideRows > 0 || func() bool {
+		for _, lease := range leases {
+			if lease.Columns >= MaxColumns {
+				return true
+			}
+		}
+		return false
+	}() {
+		return MaxColumns, wideRows
+	}
+	columns, ok := minimumColumns(leases)
+	if !ok {
+		return 0, 0
+	}
+	return columns, minimumRows(leases)
+}
+
 // minimumRows reports the smallest row constraint across leases; zero when
 // every lease is width-only.
 func minimumRows(leases map[string]Lease) int {
@@ -617,11 +647,10 @@ func (m *Manager) removeExpired(state *paneState, now time.Time) bool {
 }
 
 func (m *Manager) reconcile(ctx context.Context, paneID string, state *paneState) error {
-	target, active := minimumColumns(state.leases)
-	if !active {
+	target, targetRows := desiredPaneSize(state.leases)
+	if target == 0 {
 		return m.restore(ctx, paneID, state)
 	}
-	targetRows := minimumRows(state.leases)
 	constrainedRows := targetRows > 0
 	if !constrainedRows {
 		targetRows = state.baselineRows

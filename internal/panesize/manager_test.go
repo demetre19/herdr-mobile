@@ -657,3 +657,44 @@ func TestAcquireFallsBackToForegroundTty(t *testing.T) {
 		t.Fatalf("cached tty = %q, want the sibling's /dev/pts/9", manager.panes["pane-1"].tty)
 	}
 }
+
+// A lease at MaxColumns is an explicit wide-view request: a narrower viewer's
+// lease must not cap it (that wedged wide view at the other client's width
+// whenever a second session held a lease on the same pane).
+func TestWideLeaseOverridesNarrowLease(t *testing.T) {
+	now := time.Unix(1000, 0)
+	provider := &fakeProcessInfoProvider{infos: map[string]*herdr.PaneProcessInfo{
+		"pane-1": processInfo("pane-1", 921),
+	}}
+	runner := &fakeCommandRunner{
+		ttyByPID: map[int]string{921: "pts/20"},
+		sizes:    map[string]terminalSize{"/dev/pts/20": {rows: 30, columns: 40}},
+	}
+	manager := testManager(provider, runner, func() time.Time { return now })
+
+	if _, _, err := manager.Acquire(context.Background(), "client-narrow", "pane-1", 48, 0); err != nil {
+		t.Fatal(err)
+	}
+	columns, _, err := manager.Acquire(context.Background(), "client-wide", "pane-1", MaxColumns, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if columns != MaxColumns {
+		t.Fatalf("wide lease applied = %d, want %d despite a 48-column lease", columns, MaxColumns)
+	}
+	if got := runner.sizes["/dev/pts/20"]; got.columns != MaxColumns {
+		t.Fatalf("tty size = %+v, want %d columns", got, MaxColumns)
+	}
+	// The narrow client keeps its own lease; removing the wide one restores
+	// the minimum contract.
+	if err := manager.Release(context.Background(), "client-wide", "pane-1"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(ReleaseGrace + time.Second)
+	if err := manager.SweepExpired(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := runner.sizes["/dev/pts/20"]; got.columns != 48 {
+		t.Fatalf("after wide release, tty = %+v, want the 48-column lease", got)
+	}
+}
