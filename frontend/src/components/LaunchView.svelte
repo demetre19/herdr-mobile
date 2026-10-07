@@ -277,8 +277,9 @@
               <p>Update and restart this computer’s relay to browse directories.</p>
             {:else if connection.directoryLoading && !connection.directoryBrowser}
               <p>Loading folders…</p>
-            {:else if connection.directoryError}
+            {:else if connection.directoryError && !connection.directoryBrowser}
               <p role="alert">{connection.directoryError}</p>
+              <button type="button" onclick={() => loadDirectory(cwd || '~')}>↻ Retry</button>
             {:else}
               <!-- Keep the live listing mounted while a drill-down fetches:
                    swapping in a placeholder mid-tap looked like the browser
@@ -296,6 +297,10 @@
                 autocapitalize="none"
                 spellcheck="false"
               />
+              {#if connection.directoryError}
+                <p class="directory-notice" role="alert">{connection.directoryError} — the listing shown is still live; pick a folder to retry.</p>
+              {/if}
+              <button type="button" class="directory-refresh" onclick={() => loadDirectory(connection?.directoryBrowser?.current.path || cwd || '~')} disabled={connection.directoryLoading}>↻ Refresh</button>
               {#if directoryNotice}<p class="directory-notice" role="status">{directoryNotice}</p>{/if}
               {#if connection?.directoryBrowser?.parent}
                 <button type="button" onclick={() => loadDirectory(connection.directoryBrowser?.parent || '')}>↰ Parent folder</button>
