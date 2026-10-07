@@ -45,7 +45,7 @@
     stopSpeech,
   } from '$lib/speech';
   import { interfaceSize, terminalHeightLease, theme } from '$lib/preferences';
-  import { cachedPaneSize, storePaneSize } from '$lib/pane-size-cache';
+  import { cachedPaneSize, storePaneSize, stabilizePaneSize } from '$lib/pane-size-cache';
   import { replaceView } from '$lib/router';
   import { targetRefForAgent, targetRefMatchesAgent } from '$lib/resource-id';
   import { securityState } from '$lib/security';
@@ -280,11 +280,11 @@
   let leaseGeneration = 0;
   let leaseInFlight = false;
   let leaseTarget: Agent | null = null;
-  // Seeded from the per-pane cache: the phone's width never changes between
-  // visits, so the last applied lease is the right one. This engages the
-  // wrapping layout on the first paint instead of after a measure → lease →
-  // settle round trip; the background lease below still confirms it.
-  const cachedPaneLease = cachedPaneSize(untrack(() => agent.pane_id));
+  // Seeded from the global cache: the phone's width never changes, so every
+  // pane leases the same size. This engages the wrapping layout on the first
+  // paint instead of after a measure → lease → settle round trip; the
+  // background lease below still confirms it.
+  const cachedPaneLease = cachedPaneSize();
   let lastLeasedColumns = $state(cachedPaneLease.columns);
   let lastLeasedRows = cachedPaneLease.rows;
   let renderedResizeColumns = $state(0);
@@ -1999,9 +1999,9 @@
     sendTerminalKey('Tab');
   }
 
-  // Long-press ^ opens a chord menu: the common control chords go out
-  // directly through send_keys, no soft keyboard round trip. A plain tap
-  // still arms Ctrl as before.
+  // Tap ^ opens a chord menu (same pattern as the arrow/F-key pads): the
+  // common control chords go out directly through send_keys, no soft-keyboard
+  // round trip. 'Arm Ctrl' keeps the old type-any-key chord flow reachable.
   const CTRL_CHORD_MENU: { keys: string[]; label: string; hint: string }[] = [
     { keys: ['ctrl+c'], label: 'Ctrl+C', hint: 'Interrupt' },
     { keys: ['ctrl+d'], label: 'Ctrl+D', hint: 'EOF / exit' },
@@ -2010,37 +2010,22 @@
     { keys: ['ctrl+r'], label: 'Ctrl+R', hint: 'Search history' },
   ];
   let ctrlChordMenuOpen = $state(false);
-  let ctrlPressTimer: ReturnType<typeof setTimeout> | null = null;
-  let ctrlLongPressFired = false;
 
-  function ctrlPressStart() {
-    ctrlLongPressFired = false;
-    ctrlPressTimer = setTimeout(() => {
-      ctrlPressTimer = null;
-      ctrlLongPressFired = true;
-      ctrlChordMenuOpen = true;
-    }, 450);
-  }
-
-  function ctrlPressCancel() {
-    if (ctrlPressTimer !== null) {
-      clearTimeout(ctrlPressTimer);
-      ctrlPressTimer = null;
-    }
-  }
-
-  function toggleCtrlGuarded() {
-    // The tap that ended a long-press must not also arm the modifier.
-    if (ctrlLongPressFired) {
-      ctrlLongPressFired = false;
-      return;
-    }
-    toggleCtrl();
+  function toggleCtrlMenu() {
+    ctrlChordMenuOpen = !ctrlChordMenuOpen;
+    fkeysOpen = false;
+    arrowsOpen = false;
   }
 
   function sendCtrlChord(keys: string[], label: string) {
     ctrlChordMenuOpen = false;
     void sendKeys(keys, label);
+  }
+
+  function armCtrlFromMenu() {
+    ctrlChordMenuOpen = false;
+    toggleModifier('ctrl');
+    modifierInputElement.focus();
   }
 
   function sendFunctionKey(number: number) {
@@ -2467,7 +2452,7 @@
     if (!paneSizeLeaseSupported(target)) return;
     // Wide view leases the pane at the relay's cap so ASCII art and wide
     // tables render unwrapped; the view pans sideways to reveal them.
-    const columns = wideView ? MAX_PANE_SIZE_COLUMNS : measuredPaneColumns();
+    let columns = wideView ? MAX_PANE_SIZE_COLUMNS : measuredPaneColumns();
     if (columns === null) {
       if (terminalElement && cellMeasureElement) {
         paneSizeLeaseError = 'Resize Session could not measure the terminal cell width.';
@@ -2475,6 +2460,12 @@
       return;
     }
     let rows = paneSizeRowLeaseSupported(target) ? measuredPaneRows() : 0;
+    // Font loading and sub-pixel rounding wobble the probe by a column or two
+    // between mounts. Wobble must not fight the cache: snap to the cached size
+    // when the measurement is within a couple of cells, so a steady-state tab
+    // switch requests exactly the cached lease and never re-runs the settle
+    // wait (the 'Resizing terminal…' placeholder).
+    ({ columns, rows } = stabilizePaneSize(columns, rows, cachedPaneLease));
     // The on-screen keyboard shrinks the terminal while the user types, and
     // leasing that transient height would SIGWINCH the agent twice per
     // keyboard toggle. Every full-height redraw can strand a stale copy of a
@@ -2518,7 +2509,7 @@
           // switch bumps the generation and skips the rest, but the relay DID
           // apply this size — skipping the write here is what kept the cache
           // empty and 'Resizing terminal…' on every switch.
-          storePaneSize(target.pane_id, applied.columns, applied.rows);
+          if (!wideView) storePaneSize(applied.columns, applied.rows);
           if (generation !== leaseGeneration
             || leaseTarget?.pane_id !== target.pane_id
             || !paneSizeLeaseSupported(target)) continue;
@@ -2826,6 +2817,12 @@
           onclick={() => sendCtrlChord(chord.keys, chord.label)}
         ><kbd>{chord.label}</kbd><span>{chord.hint}</span></button>
       {/each}
+      <button
+        role="menuitem"
+        disabled={readOnly || keySending}
+        onpointerdown={(event) => event.preventDefault()}
+        onclick={armCtrlFromMenu}
+      ><kbd>^ _</kbd><span>Arm Ctrl, type any key</span></button>
     </div>
   {/if}
 {/snippet}
@@ -3317,13 +3314,10 @@
           aria-controls="modifier-key-input"
           aria-pressed={ctrlArmed}
           aria-expanded={ctrlChordMenuOpen}
-          aria-label="Ctrl — hold for common chords"
-          title="Tap to arm Ctrl; hold for Ctrl+C, Ctrl+D, Ctrl+Z, Ctrl+L, Ctrl+R"
-          onpointerdown={(event) => { event.preventDefault(); ctrlPressStart(); }}
-          onpointerup={ctrlPressCancel}
-          onpointerleave={ctrlPressCancel}
-          onpointercancel={ctrlPressCancel}
-          onclick={toggleCtrlGuarded}
+          aria-label="Ctrl chords"
+          title="Common Ctrl chords; arm Ctrl to type your own"
+          onpointerdown={(event) => event.preventDefault()}
+          onclick={toggleCtrlMenu}
         ><span class="key-caret">^</span></Button>
         <Button
           variant="secondary"
