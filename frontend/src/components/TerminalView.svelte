@@ -280,6 +280,11 @@
   let leaseGeneration = 0;
   let leaseInFlight = false;
   let leaseTarget: Agent | null = null;
+  // The first confirmed lease of a mount must always fetch the pane's live
+  // screen: with a seeded cache the lease usually applies "unchanged", and for
+  // lease-capable relays nothing else performs the initial read — skipping it
+  // left the terminal stuck on 'Loading…'.
+  let leaseReadDone = false;
   // Seeded from the global cache: the phone's width never changes, so every
   // pane leases the same size. This engages the wrapping layout on the first
   // paint instead of after a measure → lease → settle round trip; the
@@ -2518,11 +2523,12 @@
           lastLeasedColumns = applied.columns;
           lastLeasedRows = applied.rows;
           paneSizeLeaseError = '';
-          if (changed) {
+          if (changed || !leaseReadDone) {
             // The pane repaints at the new size: read again so the live
             // screen is the resized one. History stays with the relay journal.
             relayStore.readPane(target, true);
           }
+          leaseReadDone = true;
         } catch (error) {
           if (generation === leaseGeneration
             && leaseTarget?.pane_id === target.pane_id
