@@ -2514,6 +2514,11 @@
           if (request.columns !== lastLeasedColumns
             || request.rows !== lastLeasedRows) beginResizeSettling();
           const applied = await relayStore.leasePaneSize(target, request.columns, request.rows);
+          // Cache the applied size before the generation check: a quick tab
+          // switch bumps the generation and skips the rest, but the relay DID
+          // apply this size — skipping the write here is what kept the cache
+          // empty and 'Resizing terminal…' on every switch.
+          storePaneSize(target.pane_id, applied.columns, applied.rows);
           if (generation !== leaseGeneration
             || leaseTarget?.pane_id !== target.pane_id
             || !paneSizeLeaseSupported(target)) continue;
@@ -2521,7 +2526,6 @@
             || applied.rows !== lastLeasedRows;
           lastLeasedColumns = applied.columns;
           lastLeasedRows = applied.rows;
-          storePaneSize(target.pane_id, applied.columns, applied.rows);
           paneSizeLeaseError = '';
           if (changed) {
             // The pane repaints at the new size: read again so the live
