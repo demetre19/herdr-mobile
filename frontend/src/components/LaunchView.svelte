@@ -6,7 +6,7 @@
   import { agentOpeningView } from '$lib/agent-view';
   import Card from '$components/ui/Card.svelte';
   import { suggestedLaunchName } from '$lib/launch';
-  import { defaultAgentView, defaultDirectories, paneAgentViewOverrides, setDefaultDirectory, favoriteAgentProfile, setFavoriteAgent } from '$lib/preferences';
+  import { defaultAgentView, defaultDirectories, paneAgentViewOverrides, setDefaultDirectory, favoriteAgentProfile, setFavoriteAgent, directoryUsage, recordDirectoryUse } from '$lib/preferences';
   import { targetRefForAgent } from '$lib/resource-id';
   import { replaceView } from '$lib/router';
   import { relayStore } from '$lib/store';
@@ -61,6 +61,14 @@
     const query = directoryQuery.trim().toLowerCase();
     if (!query || query.includes('/')) return entries;
     return entries.filter((entry) => entry.name.toLowerCase().includes(query));
+  });
+  // Most-launched directories as quick-picks; hidden the moment the reader
+  // types a filter or a path.
+  const topDirectoryPicks = $derived.by(() => {
+    if (directoryQuery.trim()) return [];
+    const list = [...($directoryUsage[relayId] || [])]
+      .sort((a, b) => b.count - a.count || b.lastUsed - a.lastUsed);
+    return list.slice(0, 8);
   });
   const profiles = $derived(connection?.agentProfiles || []);
   // A pinned favorite floats to the top of the list as well as preselecting.
@@ -175,6 +183,7 @@
         prompt,
         workspace_id: targetWorkspace?.workspace_id || '',
       }, 45_000);
+      recordDirectoryUse(relayId, launchCwd);
       const warning = String(result.data?.warning || '');
       status = warning || 'Agent started.';
       error = Boolean(warning);
@@ -286,6 +295,13 @@
                    jumped back to home. -->
               <div class:directory-refreshing={connection.directoryLoading}
                    aria-busy={connection.directoryLoading || undefined}>
+              {#if topDirectoryPicks.length}
+                <div class="directory-picks" aria-label="Frequently used folders">
+                  {#each topDirectoryPicks as pick (pick.path)}
+                    <button type="button" class="directory-pick" title={pick.path} onclick={() => loadDirectory(pick.path)}>📁 {pick.path.split('/').filter(Boolean).pop()}</button>
+                  {/each}
+                </div>
+              {/if}
               <input
                 class="directory-search"
                 type="search"

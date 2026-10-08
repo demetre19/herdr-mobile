@@ -2823,24 +2823,23 @@
 {#snippet ctrlChordPopup()}
   {#if ctrlChordMenuOpen}
     <div class="ctrl-chord-popup" role="menu" aria-label="{chordSet.title} chords">
-      <header>
-        <span>{chordSet.title}</span>
-        <button class="ctrl-chord-close" aria-label="Close chords" onpointerdown={(event) => event.preventDefault()} onclick={closeCtrlMenu}>✕</button>
-      </header>
+      <button class="ctrl-chord-close" aria-label="Close chords" title="Close chords" onpointerdown={(event) => event.preventDefault()} onclick={closeCtrlMenu}>✕</button>
       {#each chordSet.chords as chord (chord.keys.join('+'))}
         <button
           role="menuitem"
           disabled={readOnly}
+          title={chord.hint}
           onpointerdown={(event) => event.preventDefault()}
           onclick={() => sendCtrlChord(chord.keys, chord.label)}
-        ><kbd>{chord.label}</kbd><span>{chord.hint}</span></button>
+        ><kbd>{chord.label}</kbd></button>
       {/each}
       <button
         role="menuitem"
         disabled={readOnly}
+        title="Arm Ctrl, type any key"
         onpointerdown={(event) => event.preventDefault()}
         onclick={armCtrlFromMenu}
-      ><kbd>^ _</kbd><span>Arm Ctrl, type any key</span></button>
+      ><kbd>^_</kbd></button>
     </div>
   {/if}
 {/snippet}

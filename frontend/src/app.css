@@ -546,6 +546,9 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .directory-list button { background: transparent; border: 0; border-bottom: 1px solid var(--border); color: var(--foreground); padding: .7rem; text-align: left; }
 .directory-list p { color: var(--muted); font-size: .75rem; margin: 0; padding: .8rem; }
 .directory-search { background: var(--input); border: 0; border-bottom: 1px solid var(--border); color: var(--foreground); font: inherit; padding: .6rem .7rem; }
+.directory-picks { border-bottom: 1px solid var(--border); display: flex; gap: .35rem; overflow-x: auto; overscroll-behavior-x: contain; padding: .5rem .7rem; scrollbar-width: none; }
+.directory-picks::-webkit-scrollbar { display: none; }
+.directory-list .directory-pick { background: var(--secondary); border: 0 !important; border-radius: .45rem; color: var(--foreground); flex: 0 0 auto; font-size: .74rem; padding: .35rem .6rem; white-space: nowrap; }
 .directory-notice { color: var(--warning) !important; }
 .directory-refreshing { opacity: .55; }
 .directory-refreshing button { pointer-events: none; }
@@ -969,12 +972,14 @@ button.key-flash-error { background: color-mix(in srgb, var(--danger) 30%, var(-
 .arrow-popup button { background: var(--secondary); border: 0; border-radius: .4rem; color: var(--foreground); height: 2.3rem; }
 .fkey-popup { background: var(--card); border: 1px solid var(--border); border-radius: .625rem; bottom: calc(100% - .2rem); display: grid; gap: .2rem; grid-template-columns: repeat(4, 2.6rem); padding: .35rem; position: absolute; right: .55rem; z-index: 10; }
 .fkey-popup button { background: var(--secondary); border: 0; border-radius: .4rem; color: var(--foreground); font-size: .72rem; height: 2.3rem; }
-.ctrl-chord-popup { background: var(--card); border: 1px solid var(--border); border-radius: .625rem; bottom: calc(100% - .2rem); display: grid; gap: .2rem; padding: .35rem; position: absolute; right: .55rem; z-index: 10; }
-.ctrl-chord-popup button { align-items: center; background: var(--secondary); border: 0; border-radius: .4rem; color: var(--foreground); display: flex; gap: .6rem; justify-content: space-between; min-height: 2.3rem; padding: 0 .55rem; }
-.ctrl-chord-popup button kbd { font-size: .72rem; font-weight: 700; }
-.ctrl-chord-popup button span { color: var(--muted); font-size: .68rem; }
-.ctrl-chord-popup header { align-items: center; color: var(--muted); display: flex; font-size: .58rem; font-weight: 700; justify-content: space-between; letter-spacing: .06em; padding: .1rem .3rem 0; text-transform: uppercase; }
-.ctrl-chord-popup .ctrl-chord-close { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: .8rem; line-height: 1; min-height: 1.6rem; min-width: 1.6rem; padding: 0; }
+/* Full-width horizontal strip pinned just above the bottom bar: a vertical
+   popup covered the log and overflowed the key row. Buttons are compact
+   combo chips only — hints live in the button title. */
+.ctrl-chord-popup { align-items: center; background: var(--card); border-top: 1px solid var(--border); bottom: 100%; display: flex; gap: .3rem; left: 0; overflow-x: auto; overscroll-behavior-x: contain; padding: .28rem .55rem; position: absolute; right: 0; scrollbar-width: none; z-index: 10; }
+.ctrl-chord-popup::-webkit-scrollbar { display: none; }
+.ctrl-chord-popup button { align-items: center; background: var(--secondary); border: 0; border-radius: .45rem; color: var(--foreground); display: flex; flex: 0 0 auto; min-height: 2rem; padding: 0 .6rem; }
+.ctrl-chord-popup button kbd { font-size: .74rem; font-weight: 700; }
+.ctrl-chord-popup .ctrl-chord-close { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: .8rem; line-height: 1; min-height: 2rem; min-width: 2rem; padding: 0; }
 /* Question-mode keys render outside .terminal-bottom, so popups there anchor
    to this strip pinned to the bottom of the question main. */
 .question-popups { bottom: 0; left: 0; position: absolute; right: 0; }

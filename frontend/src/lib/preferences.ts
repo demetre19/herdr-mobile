@@ -7,6 +7,7 @@ import {
   APPEARANCES,
   DEFAULT_AGENT_VIEW_KEY,
   DEFAULT_DIRECTORY_KEY,
+  DIRECTORY_USAGE_KEY,
   FAVORITE_AGENT_KEY,
   PANE_AGENT_VIEW_OVERRIDES_KEY,
   PINNED_CONVERSATIONS_KEY,
@@ -586,6 +587,72 @@ export function setDefaultDirectory(relayId: string, path: string): 'saved' | 'u
   }
   defaultDirectories.set(next);
   return 'saved';
+}
+
+// --- Per-relay directory usage (launch quick-picks) ---------------------------
+
+export interface DirectoryUsageEntry {
+  path: string;
+  count: number;
+  lastUsed: number;
+}
+
+type DirectoryUsageMap = Record<string, DirectoryUsageEntry[]>;
+
+function readDirectoryUsage(storage?: Pick<Storage, 'getItem'>): DirectoryUsageMap {
+  try {
+    const raw = (storage || localStorage).getItem(DIRECTORY_USAGE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: DirectoryUsageMap = {};
+    for (const [relay, list] of Object.entries(parsed)) {
+      if (!Array.isArray(list)) continue;
+      const entries = list.filter((item): item is DirectoryUsageEntry => (
+        Boolean(item) && typeof item === 'object'
+        && typeof (item as DirectoryUsageEntry).path === 'string'
+        && typeof (item as DirectoryUsageEntry).count === 'number'
+      ));
+      if (entries.length) out[relay] = entries;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export const directoryUsage = writable<DirectoryUsageMap>(readDirectoryUsage());
+
+/** Top directories for a relay: most-used first, ties broken by recency. */
+export function topDirectories(relayId: string, limit = 8): DirectoryUsageEntry[] {
+  const list = get(directoryUsage)[relayId] || [];
+  return [...list]
+    .sort((a, b) => b.count - a.count || b.lastUsed - a.lastUsed)
+    .slice(0, limit);
+}
+
+/** Record a launched working directory so the picker can surface it later. */
+export function recordDirectoryUse(relayId: string, path: string): void {
+  const trimmed = path.trim();
+  if (!relayId || !trimmed) return;
+  const map = get(directoryUsage);
+  const list = [...(map[relayId] || [])];
+  const existing = list.find((entry) => entry.path === trimmed);
+  if (existing) {
+    existing.count += 1;
+    existing.lastUsed = Date.now();
+  } else {
+    list.push({ path: trimmed, count: 1, lastUsed: Date.now() });
+  }
+  // Cap per relay so the map can't grow unboundedly; drop least-used tail.
+  list.sort((a, b) => b.count - a.count || b.lastUsed - a.lastUsed);
+  const next = { ...map, [relayId]: list.slice(0, 32) };
+  try {
+    localStorage.setItem(DIRECTORY_USAGE_KEY, JSON.stringify(next));
+  } catch {
+    return;
+  }
+  directoryUsage.set(next);
 }
 
 // --- Favorite launch agent ---------------------------------------------------
