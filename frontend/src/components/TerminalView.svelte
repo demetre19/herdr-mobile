@@ -1539,13 +1539,11 @@
       (finalText, interimText) => {
         const separator = dictationBase && (finalText || interimText) && !dictationBase.endsWith(' ') ? ' ' : '';
         const next = dictationBase + separator + finalText + interimText;
-        if (localStorage.getItem('herdr_dictation_debug') === '1') {
-          try {
-            const list: unknown[] = JSON.parse(localStorage.getItem('herdr_dictation_trace') || '[]');
-            list.push({ t: Date.now(), kind: 'composer', before: composer, after: next, finalText, interimText });
-            localStorage.setItem('herdr_dictation_trace', JSON.stringify(list.slice(-40)));
-          } catch { /* ignore */ }
-        }
+        try {
+          const list: unknown[] = JSON.parse(localStorage.getItem('herdr_dictation_trace') || '[]');
+          list.push({ t: Date.now(), kind: 'composer', before: composer, after: next, finalText, interimText });
+          localStorage.setItem('herdr_dictation_trace', JSON.stringify(list.slice(-40)));
+        } catch { /* storage unavailable */ }
         composer = next;
       },
       (message) => relayStore.showToast(message, true),
@@ -3237,7 +3235,15 @@
           disabled={composerLocked}
           aria-label={$dictationState === 'listening' ? 'Stop dictation' : 'Dictate prompt'}
           aria-pressed={$dictationState === 'listening'}
-          title={$dictationState === 'listening' ? 'Stop dictation' : 'Dictate with the phone microphone'}
+          title={$dictationState === 'listening' ? 'Stop dictation' : 'Dictate with the phone microphone (long-press: copy dictation log)'}
+          oncontextmenu={(event) => {
+            event.preventDefault();
+            const trace = localStorage.getItem('herdr_dictation_trace') || '[]';
+            void navigator.clipboard?.writeText(trace).then(
+              () => relayStore.showToast('Dictation log copied.'),
+              () => relayStore.showToast(trace.slice(0, 120), true),
+            );
+          }}
           onclick={toggleDictation}
         >
           <svg class="button-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">

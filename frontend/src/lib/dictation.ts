@@ -55,12 +55,10 @@ let sessionFinal = '';
 let onText: ((finalText: string, interimText: string) => void) | undefined;
 let onIssue: ((message: string) => void) | undefined;
 
-// Opt-in trace for diagnosing Android recognizer behavior on real devices:
-// `localStorage.setItem('herdr_dictation_debug','1')` before dictating; the
-// last 40 events land in 'herdr_dictation_trace' for inspection.
+// Ring of recent recognizer events for diagnosing Android behavior on real
+// devices; long-press the mic button in the composer to copy it out.
 function dictationTrace(entry: Record<string, unknown>): void {
   try {
-    if (localStorage.getItem('herdr_dictation_debug') !== '1') return;
     const list: unknown[] = JSON.parse(localStorage.getItem('herdr_dictation_trace') || '[]');
     list.push({ t: Date.now(), ...entry });
     localStorage.setItem('herdr_dictation_trace', JSON.stringify(list.slice(-40)));
