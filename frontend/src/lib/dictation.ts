@@ -65,6 +65,22 @@ function dictationTrace(entry: Record<string, unknown>): void {
   } catch { /* storage unavailable */ }
 }
 
+// Spoken punctuation, ported from FrankenKey's format_dictation
+// (MultimodalVoiceInput). The Web Speech service we get on Android returns
+// bare text with no formatting extra, so commands land as literal words.
+// Idempotent: running it over already-converted text is a no-op.
+function formatDictation(text: string): string {
+  return text
+    .replace(/\s+comma\b/gi, ',')
+    .replace(/\s+(full stop|period)\b/gi, '.')
+    .replace(/\s+question mark\b/gi, '?')
+    .replace(/\s+exclamation (mark|point)\b/gi, '!')
+    .replace(/\s+colon\b/gi, ':')
+    .replace(/\s+semicolon\b/gi, ';')
+    .replace(/\s+new paragraph\b/gi, '\n\n')
+    .replace(/\s+new line\b/gi, '\n');
+}
+
 /**
  * Starts dictating. `onText` receives the full committed transcript so far
  * plus the current interim fragment — the caller renders both in the input
@@ -153,7 +169,7 @@ export function startDictation(
         interim = interim.trim().slice(committed.length).trimStart();
       }
       dictationTrace({ kind: 'result', committed, finals, interim, joined });
-      onText?.(joined, interim);
+      onText?.(formatDictation(joined), formatDictation(interim));
     };
 
     target.onerror = (event) => {
