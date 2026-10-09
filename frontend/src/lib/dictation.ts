@@ -90,12 +90,17 @@ export function startDictation(
       // remains is either one cumulative transcript or genuinely distinct
       // final segments.
       const kept: SpeechRecognitionResultLike[] = [];
+      const seen: Record<string, true> = {};
       for (let i = 0; i < event.results.length; i++) {
         const text = event.results[i][0].transcript.trim();
+        // Identical restatements (some recognizers re-fire the same final
+        // result twice in one event) keep only the last copy.
+        if (seen[text]) continue;
+        seen[text] = true;
         let covered = false;
         for (let j = i + 1; j < event.results.length; j++) {
           const later = event.results[j][0].transcript.trim();
-          if (later.length > text.length && later.startsWith(text)) { covered = true; break; }
+          if (later.length >= text.length && later.startsWith(text)) { covered = true; break; }
         }
         if (!covered) kept.push(event.results[i]);
       }
@@ -112,8 +117,21 @@ export function startDictation(
         const interimText = interim.trim();
         if (interimText && finalText.startsWith(interimText)) interim = '';
       }
-      sessionFinal = finals;
-      const joined = committed && sessionFinal ? `${committed} ${sessionFinal.trim()}` : committed + sessionFinal;
+      // A restarted session may replay the text we already folded into
+      // committed (the recognizer's list carries over despite the fresh
+      // recognizer). If the new session transcript starts with committed,
+      // it IS the whole transcript so far — don't join them.
+      const trimmedSession = sessionFinal.trim();
+      const joined = committed && trimmedSession.startsWith(committed)
+        ? trimmedSession
+        : committed && trimmedSession
+          ? `${committed} ${trimmedSession}`
+          : committed || trimmedSession;
+      // Same replay guard for the interim: a fresh session's interim may
+      // restate committed text before any final arrives.
+      if (committed && interim.trim().startsWith(committed)) {
+        interim = interim.trim().slice(committed.length).trimStart();
+      }
       onText?.(joined, interim);
     };
 
