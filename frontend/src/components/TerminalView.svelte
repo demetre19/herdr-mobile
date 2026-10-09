@@ -20,6 +20,8 @@
     sortedAgents,
   } from '$lib/agents';
   import { clearPromptDraft, loadPromptDraft, savePromptDraft } from '$lib/prompt-drafts';
+  import { inputTrace } from '$lib/input-trace';
+
   import {
     findTerminalText,
     terminalMatchFragments,
@@ -753,6 +755,7 @@
 
   onMount(() => {
     componentMounted = true;
+    inputTrace({ kind: 'mount', pane: agent.pane_id });
     const stopWakeLock = mountTerminalWakeLock();
     const measurePane = () => requestPaneSizeLease(false);
     const realtimeDeltaEnabled = () => Boolean(
@@ -810,6 +813,7 @@
     void tick().then(measurePane);
     return () => {
       componentMounted = false;
+      inputTrace({ kind: 'unmount', pane: agent.pane_id });
       window.removeEventListener('resize', measurePane);
       window.visualViewport?.removeEventListener('resize', measurePane);
       document.removeEventListener('visibilitychange', visibilityChanged);
@@ -1568,6 +1572,7 @@
     const targetIdentity = targetRefForAgent(target);
     sendingFilter = terminalText === 'filter';
     sendingPrompt = true;
+    inputTrace({ kind: 'composer-clear', why: 'send', text: submittedDraft.slice(-40) });
     composer = '';
     clearPromptDraft(target);
     try {
@@ -1669,12 +1674,25 @@
     void submitSecret();
   }
 
-  function composerInput() {
+  function composerInput(event: Event) {
+    const input = event as InputEvent;
+    inputTrace({
+      kind: 'input',
+      inputType: input.inputType || '',
+      data: input.data ?? null,
+      composing: Boolean(input.isComposing),
+      value: (event.currentTarget as HTMLTextAreaElement).value.slice(-40),
+    });
     if (dismissedSlashQuery !== composer) dismissedSlashQuery = null;
     activeSlashIndex = 0;
   }
 
+  function composerComposition(kind: 'compositionstart' | 'compositionend', event: CompositionEvent) {
+    inputTrace({ kind, data: event.data ?? null });
+  }
+
   function clearComposer() {
+    inputTrace({ kind: 'composer-clear', why: 'button' });
     composer = '';
     dismissedSlashQuery = null;
     activeSlashIndex = 0;
@@ -3222,6 +3240,8 @@
           enterkeyhint="enter"
           oninput={composerInput}
           onkeydown={keydown}
+          oncompositionstart={(event: CompositionEvent) => composerComposition('compositionstart', event)}
+          oncompositionend={(event: CompositionEvent) => composerComposition('compositionend', event)}
           onpaste={paste}
         ></textarea>
         {#if composer}<button class="input-clear" aria-label="Clear prompt text" onclick={clearComposer}>×</button>{/if}
@@ -3238,7 +3258,7 @@
           title={$dictationState === 'listening' ? 'Stop dictation' : 'Dictate with the phone microphone (long-press: copy dictation log)'}
           oncontextmenu={(event) => {
             event.preventDefault();
-            const trace = localStorage.getItem('herdr_dictation_trace') || '[]';
+            const trace = `${localStorage.getItem('herdr_dictation_trace') || '[]'}\n${localStorage.getItem('herdr_input_trace') || '[]'}`;
             void navigator.clipboard?.writeText(trace).then(
               () => relayStore.showToast('Dictation log copied.'),
               () => relayStore.showToast(trace.slice(0, 120), true),
