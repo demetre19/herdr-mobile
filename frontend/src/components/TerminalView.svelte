@@ -1538,7 +1538,15 @@
       $speechLanguage,
       (finalText, interimText) => {
         const separator = dictationBase && (finalText || interimText) && !dictationBase.endsWith(' ') ? ' ' : '';
-        composer = dictationBase + separator + finalText + interimText;
+        const next = dictationBase + separator + finalText + interimText;
+        if (localStorage.getItem('herdr_dictation_debug') === '1') {
+          try {
+            const list: unknown[] = JSON.parse(localStorage.getItem('herdr_dictation_trace') || '[]');
+            list.push({ t: Date.now(), kind: 'composer', before: composer, after: next, finalText, interimText });
+            localStorage.setItem('herdr_dictation_trace', JSON.stringify(list.slice(-40)));
+          } catch { /* ignore */ }
+        }
+        composer = next;
       },
       (message) => relayStore.showToast(message, true),
     );

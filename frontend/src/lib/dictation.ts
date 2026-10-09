@@ -55,6 +55,18 @@ let sessionFinal = '';
 let onText: ((finalText: string, interimText: string) => void) | undefined;
 let onIssue: ((message: string) => void) | undefined;
 
+// Opt-in trace for diagnosing Android recognizer behavior on real devices:
+// `localStorage.setItem('herdr_dictation_debug','1')` before dictating; the
+// last 40 events land in 'herdr_dictation_trace' for inspection.
+function dictationTrace(entry: Record<string, unknown>): void {
+  try {
+    if (localStorage.getItem('herdr_dictation_debug') !== '1') return;
+    const list: unknown[] = JSON.parse(localStorage.getItem('herdr_dictation_trace') || '[]');
+    list.push({ t: Date.now(), ...entry });
+    localStorage.setItem('herdr_dictation_trace', JSON.stringify(list.slice(-40)));
+  } catch { /* storage unavailable */ }
+}
+
 /**
  * Starts dictating. `onText` receives the full committed transcript so far
  * plus the current interim fragment — the caller renders both in the input
@@ -133,6 +145,7 @@ export function startDictation(
       if (committed && interim.trim().startsWith(committed)) {
         interim = interim.trim().slice(committed.length).trimStart();
       }
+      dictationTrace({ kind: 'result', committed, finals, interim, joined });
       onText?.(joined, interim);
     };
 
@@ -153,6 +166,7 @@ export function startDictation(
     // Android Chrome ends the session on a pause even with continuous=true;
     // restart while the user still wants dictation so pauses don't kill it.
     target.onend = () => {
+      dictationTrace({ kind: 'end', sessionFinal, committed, wantListening });
       // Fold this session's transcript into committed before the restart so
       // the next session's fresh result list can't repeat it.
       const folded = sessionFinal.trim();
