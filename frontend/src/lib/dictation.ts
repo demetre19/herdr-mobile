@@ -127,11 +127,20 @@ export function startDictation(
         const interimText = interim.trim();
         if (interimText && finalText.startsWith(interimText)) interim = '';
       }
+      // This recognizer interleaves EMPTY result events between cumulative
+      // finals (traced on-device: text lands, then an empty event wipes the
+      // composer, then text regrows). Treat them as noise — preserving the
+      // previous session/interim is safe because real interim retractions
+      // are always followed by a new result.
+      if (!finals && !interim) {
+        dictationTrace({ kind: 'empty', committed, sessionFinal });
+        return;
+      }
       // A restarted session may replay the text we already folded into
       // committed (the recognizer's list carries over despite the fresh
       // recognizer). If the new session transcript starts with committed,
       // it IS the whole transcript so far — don't join them.
-      sessionFinal = finals;
+      sessionFinal = finals || sessionFinal;
       const trimmedSession = sessionFinal.trim();
       const joined = committed && trimmedSession.startsWith(committed)
         ? trimmedSession
