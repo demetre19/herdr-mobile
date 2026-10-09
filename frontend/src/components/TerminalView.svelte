@@ -158,6 +158,8 @@
   // would toggle dictation on while copying the trace (composer goes
   // readonly+inputmode=none, keyboard dies, dictated text stomps typing).
   let suppressDictationClick = false;
+  let composerComposing = false;
+  let resizeAfterComposition = false;
   let historyTruncated = $state(false);
   // Pre-resize frame kept only to suppress display of transient frames while
   // the agent repaints at the new width.
@@ -1539,6 +1541,15 @@
   function toggleDictation() {
     if ($dictationState === 'listening') {
       stopDictation();
+      // Android Chrome leaves the IME suppressed after inputmode flips off
+      // 'none' — blur/refocus re-arms the keyboard (the Send button appeared
+      // to "unlock" it only because focus moved).
+      void tick().then(() => {
+        if (composerElement && document.activeElement !== composerElement) {
+          composerElement.blur();
+          composerElement.focus();
+        }
+      });
       return;
     }
     dictationBase = composer;
@@ -1692,6 +1703,8 @@
   }
 
   function composerComposition(kind: 'compositionstart' | 'compositionend', event: CompositionEvent) {
+    composerComposing = kind === 'compositionstart';
+    if (!composerComposing && resizeAfterComposition) void tick().then(resizeComposer);
     inputTrace({ kind, data: event.data ?? null });
   }
 
@@ -1704,6 +1717,12 @@
 
   function resizeComposer() {
     if (!composerElement) return;
+    // A composition is live when the IME owns the buffer (composing input
+    // events between compositionstart/end). Resizing mid-composition writes
+    // layout under the IME and force-commits at the stale cursor — the
+    // "text jumps to the middle" bug. Defer until the composition ends.
+    if (composerComposing) { resizeAfterComposition = true; return; }
+    resizeAfterComposition = false;
     composerElement.style.height = 'auto';
     const maxHeight = Number.parseFloat(getComputedStyle(composerElement).maxHeight);
     const contentHeight = composerElement.scrollHeight;

@@ -153,16 +153,30 @@ export function startDictation(
         return;
       }
       // A restarted session may replay the text we already folded into
-      // committed (the recognizer's list carries over despite the fresh
-      // recognizer). If the new session transcript starts with committed,
-      // it IS the whole transcript so far — don't join them.
+      // committed — or replay a PREFIX of it, which the old exact-prefix
+      // guard missed and duplicated wholesale (traced on-device:
+      // "hello world" replayed as "hello wor" joins as
+      // "hello world hello wor"). Use the longest common prefix: if the
+      // session transcript extends committed it's new text, if committed
+      // extends the session it's a stale replay, otherwise merge at the
+      // overlap point.
       sessionFinal = finals || sessionFinal;
       const trimmedSession = sessionFinal.trim();
-      const joined = committed && trimmedSession.startsWith(committed)
-        ? trimmedSession
-        : committed && trimmedSession
-          ? `${committed} ${trimmedSession}`
-          : committed || trimmedSession;
+      let joined: string;
+      if (!committed) joined = trimmedSession;
+      else if (!trimmedSession) joined = committed;
+      else if (trimmedSession.startsWith(committed)) joined = trimmedSession;
+      else if (committed.startsWith(trimmedSession)) joined = committed;
+      else {
+        // Partial overlap or divergence: keep the longest common prefix of
+        // committed and drop the session's duplicated head.
+        let overlap = 0;
+        const bound = Math.min(committed.length, trimmedSession.length);
+        while (overlap < bound && committed[overlap] === trimmedSession[overlap]) overlap += 1;
+        joined = overlap
+          ? `${committed} ${trimmedSession.slice(overlap).trimStart()}`.trim()
+          : `${committed} ${trimmedSession}`;
+      }
       // Same replay guard for the interim: a fresh session's interim may
       // restate committed text before any final arrives.
       if (committed && interim.trim().startsWith(committed)) {
@@ -248,6 +262,11 @@ export function stopDictation(): void {
     active.onend = null;
     try { active.stop(); } catch { /* already stopped */ }
   }
+  // Set state synchronously: Android sometimes delays or drops the recognizer's
+  // onend after stop(), which stranded 'listening' forever — the composer kept
+  // readonly+inputmode=none and the keyboard never came back (fixed: the
+  // composer's Send path calls stopDictation too, which is why Send unblocked
+  // it). Handlers are already detached above so a late onend can't re-set it.
   dictationState.set('off');
 }
 
