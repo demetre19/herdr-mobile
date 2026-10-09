@@ -121,6 +121,7 @@ export function startDictation(
       // committed (the recognizer's list carries over despite the fresh
       // recognizer). If the new session transcript starts with committed,
       // it IS the whole transcript so far — don't join them.
+      sessionFinal = finals;
       const trimmedSession = sessionFinal.trim();
       const joined = committed && trimmedSession.startsWith(committed)
         ? trimmedSession
