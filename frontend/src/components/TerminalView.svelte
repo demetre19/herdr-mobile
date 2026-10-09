@@ -1541,16 +1541,8 @@
   function toggleDictation() {
     if ($dictationState === 'listening') {
       stopDictation();
-      // Android Chrome leaves the IME suppressed after inputmode flips off
-      // 'none' — blur/refocus re-arms the keyboard (the Send button appeared
-      // to "unlock" it only because focus moved).
-      void tick().then(() => {
-        if (composerElement && document.activeElement !== composerElement) {
-          composerElement.blur();
-          composerElement.focus();
-        }
-      });
       return;
+
     }
     dictationBase = composer;
     const started = startDictation(
