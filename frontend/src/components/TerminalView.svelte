@@ -154,6 +154,10 @@
   // Dictation: the draft before the mic started is kept so interim fragments
   // render appended to it without committing until recognition finalizes.
   let dictationBase = $state('');
+  // Android still fires click after a long-press contextmenu — the release
+  // would toggle dictation on while copying the trace (composer goes
+  // readonly+inputmode=none, keyboard dies, dictated text stomps typing).
+  let suppressDictationClick = false;
   let historyTruncated = $state(false);
   // Pre-resize frame kept only to suppress display of transient frames while
   // the agent repaints at the new width.
@@ -3256,15 +3260,20 @@
           aria-label={$dictationState === 'listening' ? 'Stop dictation' : 'Dictate prompt'}
           aria-pressed={$dictationState === 'listening'}
           title={$dictationState === 'listening' ? 'Stop dictation' : 'Dictate with the phone microphone (long-press: copy dictation log)'}
+          onpointerdown={() => { suppressDictationClick = false; }}
           oncontextmenu={(event) => {
             event.preventDefault();
+            suppressDictationClick = true;
             const trace = `${localStorage.getItem('herdr_dictation_trace') || '[]'}\n${localStorage.getItem('herdr_input_trace') || '[]'}`;
             void navigator.clipboard?.writeText(trace).then(
               () => relayStore.showToast('Dictation log copied.'),
               () => relayStore.showToast(trace.slice(0, 120), true),
             );
           }}
-          onclick={toggleDictation}
+          onclick={(event) => {
+            if (suppressDictationClick) { suppressDictationClick = false; event.preventDefault(); return; }
+            toggleDictation();
+          }}
         >
           <svg class="button-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
             <rect x="9" y="2" width="6" height="12" rx="3"></rect>
