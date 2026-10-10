@@ -217,7 +217,15 @@
     const stream = streamElement;
     if (!element || !stream || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
-      if (pinnedToBottom) pinListToBottom(element);
+      if (pinnedToBottom) { pinListToBottom(element); return; }
+      // Unpinned: content resized around the reader (attachments decoding,
+      // tables/wide lines settling, injected styles relayout). scrollTop is
+      // unchanged so the reading row drifts — re-anchor to the row that was
+      // at the viewport top, same contract applyHistoryState uses.
+      if (touchHeld) return;
+      const anchor = topVisibleEntry();
+      if (!anchor) return;
+      void tick().then(() => restoreScrollAnchor(anchor, element.scrollTop, element.scrollHeight));
     });
     // The stream grows with the turns; the scroller's own box changes with the
     // on-screen keyboard and rotation, which moves the end away as well.
