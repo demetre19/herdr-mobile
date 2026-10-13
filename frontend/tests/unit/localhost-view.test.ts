@@ -2,8 +2,10 @@ import { render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import LocalhostView from '$components/LocalhostView.svelte';
+import AgentList from '$components/AgentList.svelte';
 import { DEFAULT_LOCALHOST_PORTS } from '$lib/config';
-import { localhostPorts } from '$lib/preferences';
+import { localhostPorts, localhostEnabled, setLocalhostEnabled } from '$lib/preferences';
+import { localhostLivePorts } from '$lib/localhost';
 import { relayStore } from '$lib/store';
 import type { RelayConfig } from '$lib/types';
 
@@ -27,6 +29,7 @@ afterEach(() => {
   relayStore.relayConfigs.set([]);
   relayStore.connections.set(new Map());
   localhostPorts.set([...DEFAULT_LOCALHOST_PORTS]);
+  localhostEnabled.set(true);
 });
 
 describe('localhost viewer', () => {
@@ -121,5 +124,48 @@ describe('localhost viewer', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Port 5173, service available' })).toBeTruthy());
     await userEvent.click(screen.getByRole('button', { name: 'Port 5173, service available' }));
     await waitFor(() => expect(screen.getByTitle('Localhost page from port 5173')).toBeTruthy());
+  });
+
+  it('shows the disabled state and can re-enable from the viewer', async () => {
+    setLocalhostEnabled(false);
+    render(LocalhostView, { relayId: 'relay-a' });
+    expect(screen.getByText(/Localhost is turned off in Settings/)).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Turn on' }));
+    expect(screen.queryByText(/Localhost is turned off/)).toBeNull();
+  });
+});
+
+describe('localhost cards in the agent list', () => {
+  function renderAgentList() {
+    return render(AgentList, {
+      agents: [],
+      relays: [relayConfig('relay-a', 'Mac mini')],
+      connections: new Map([['relay-a', { status: 'connected', inventory: { state: 'ready' } } as never]]),
+      responding: new Set<string>(),
+      onopen: vi.fn(),
+    });
+  }
+
+  it('renders a card only for relays with live ports, and hides everything when toggled off', async () => {
+    vi.spyOn(relayStore, 'sendCommand').mockRejectedValue(new Error('No service responded on port 3000'));
+    localhostLivePorts.set(new Map([['relay-a', [3000, 5173]]]));
+
+    const { unmount } = renderAgentList();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Browse localhost services on Mac mini' })).toBeTruthy());
+    expect(screen.getByText(/Live on 3000, 5173 · Mac mini/)).toBeTruthy();
+    unmount();
+
+    // No live ports → no card, even with the toggle on.
+    localhostLivePorts.set(new Map());
+    const empty = renderAgentList();
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Browse localhost services/ })).toBeNull());
+    empty.unmount();
+
+    // Toggle off → no card even with live ports.
+    localhostLivePorts.set(new Map([['relay-a', [3000]]]));
+    localhostEnabled.set(false);
+    const off = renderAgentList();
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Browse localhost services/ })).toBeNull());
+    off.unmount();
   });
 });

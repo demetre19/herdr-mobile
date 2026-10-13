@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { classifyLocalhostContent, localhostFetch, localhostPortUp, LOCALHOST_PORTS } from '$lib/localhost';
+import { classifyLocalhostContent, localhostFetch, localhostLivePorts, localhostPortUp, LOCALHOST_PORTS, refreshLocalhostAvailability } from '$lib/localhost';
 import { parseLocalhostPorts } from '$lib/config';
+import { localhostPorts } from '$lib/preferences';
 import { relayStore } from '$lib/store';
+import { get } from 'svelte/store';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -62,6 +64,30 @@ describe('localhost port probe', () => {
 
     vi.spyOn(relayStore, 'sendCommand').mockRejectedValue(new Error('No service responded on port 3001'));
     await expect(localhostPortUp('relay-a', 3001)).resolves.toBe(false);
+  });
+});
+
+describe('localhost availability cache', () => {
+  it('records live ports per relay and dedupes in-flight scans', async () => {
+    localhostPorts.set([3000, 3001, 8080]);
+    let calls = 0;
+    vi.spyOn(relayStore, 'sendCommand').mockImplementation((_relayId: string, payload: Record<string, unknown>) => {
+      calls += 1;
+      const port = Number(payload.port);
+      if (port === 3000 || port === 8080) {
+        return Promise.resolve({ ok: true, phase: 'completed', data: { status: 200, content_type: 'text/html', body: btoa('<html></html>'), truncated: false } } as never);
+      }
+      return Promise.reject(new Error(`No service responded on port ${port}`));
+    });
+
+    refreshLocalhostAvailability('relay-a', true);
+    refreshLocalhostAvailability('relay-a', true); // in-flight dedupe
+    await vi.waitFor(() => {
+      expect(get(localhostLivePorts).get('relay-a')).toEqual([3000, 8080]);
+    });
+    const callsAfterFirstScan = calls;
+    refreshLocalhostAvailability('relay-a'); // TTL guard is synchronous: no rescan
+    expect(calls).toBe(callsAfterFirstScan);
   });
 });
 

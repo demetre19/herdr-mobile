@@ -36,6 +36,7 @@
   import {
     defaultAgentView,
     initializePreferences,
+    localhostEnabled,
     paneAgentViewOverrides,
     pinnedConversations,
     readWorkspaceDisclosure,
@@ -730,12 +731,14 @@
             <path d="M12 7v5l3 2"></path>
           </svg>
         </Button>
+        {#if $localhostEnabled}
         <Button variant="ghost" size="icon" aria-label="Browse localhost services" title="Browse localhost services on a connected computer" onclick={() => toggle('localhost')}>
           <svg class="header-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="9"></circle>
             <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"></path>
           </svg>
         </Button>
+        {/if}
       {/if}
       <span class="nav-button-shell">
         <Button

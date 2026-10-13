@@ -25,6 +25,7 @@ import {
   TERMINAL_REFRESH_KEY,
   TERMINAL_REFRESH_OPTIONS,
   LOCALHOST_PORTS_KEY,
+  LOCALHOST_ENABLED_KEY,
   LOCALHOST_PORTS_LIMIT,
   DEFAULT_LOCALHOST_PORTS,
   parseLocalhostPorts,
@@ -138,6 +139,12 @@ function savedLocalhostPorts(): number[] {
   return parseLocalhostPorts(localStorage.getItem(LOCALHOST_PORTS_KEY));
 }
 
+// On by default: the viewer shipped enabled and the toggle exists to hide
+// it, not to gate a first-run opt-in.
+function savedLocalhostEnabled(): boolean {
+  return localStorage.getItem(LOCALHOST_ENABLED_KEY) !== 'false';
+}
+
 // Mixed by default: one card per workspace with a state dot reads better than
 // three state sections once workspaces carry worktrees, and agents needing
 // input stay on top in both layouts.
@@ -158,6 +165,7 @@ export const terminalHistoryLines = writable<TerminalHistoryLines>(savedTerminal
 export const terminalRefreshInterval = writable<TerminalRefreshInterval>(savedTerminalRefreshInterval());
 export const homeLayout = writable<HomeLayout>(savedHomeLayout());
 export const localhostPorts = writable<number[]>(savedLocalhostPorts());
+export const localhostEnabled = writable<boolean>(savedLocalhostEnabled());
 // Off by default: resizing the shared pane's height strands stale copies of
 // inline agents' status bars in the scrollback (the terminal reflows the
 // primary buffer before the agent can repaint), so only people who need
@@ -366,6 +374,11 @@ export function setLocalhostPorts(value: number[]): void {
   const next = unique.length ? unique : [...DEFAULT_LOCALHOST_PORTS];
   localStorage.setItem(LOCALHOST_PORTS_KEY, next.join(','));
   localhostPorts.set(next);
+}
+
+export function setLocalhostEnabled(value: boolean): void {
+  localStorage.setItem(LOCALHOST_ENABLED_KEY, String(value));
+  localhostEnabled.set(value);
 }
 
 

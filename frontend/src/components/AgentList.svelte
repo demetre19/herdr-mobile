@@ -21,6 +21,8 @@
   import { homeLayout, persistWorkspaceDisclosure, pinnedConversations, pinnedWorkspaces, reorderPinnedConversations, reorderPinnedWorkspaces, togglePinnedConversation, togglePinnedWorkspace } from '$lib/preferences';
   import { relayStore } from '$lib/store';
   import { navigate } from '$lib/router';
+  import { localhostEnabled, localhostPorts } from '$lib/preferences';
+  import { localhostLivePorts, refreshLocalhostAvailability } from '$lib/localhost';
   import type { Agent, RelayConfig, RelayConnectionView, RelayWorkspace } from '$lib/types';
   import { homeRelativePath, informativePath, workspaceGroupTrees, workspaceGroups, workspaceIdentity, workspaceProvenance, workspaceStateTone, type WorkspaceGroup, type WorkspaceGroupTree, type WorkspaceTab } from '$lib/workspaces';
 
@@ -56,6 +58,11 @@
   }));
   const deferredRelays = $derived(relays.filter((relay) => connections.get(relay.id)?.pairingDeferred));
   const localhostRelays = $derived(relays.filter((relay) => connections.get(relay.id)?.status === 'connected'));
+  // Localhost cards appear only when the toggle is on AND at least one
+  // configured port on that relay actually answers — never a dead entry.
+  const localhostCards = $derived($localhostEnabled
+    ? localhostRelays.filter((relay) => ($localhostLivePorts.get(relay.id) || []).length > 0)
+    : []);
   // Agent pane → its workspace's linked-worktree checkout root, so a pane
   // running inside ANY checkout gets the white tail regardless of where the
   // checkout lives (metadata beats path guessing).
@@ -807,6 +814,21 @@
     const timer = setInterval(() => { relativeNow = Date.now(); }, 60_000);
     return () => clearInterval(timer);
   });
+
+  // Keep localhost availability fresh while the list is visible: scan each
+  // connected relay when it appears, when the port list changes, and on the
+  // TTL cadence. The toggle off stops all scans.
+  $effect.pre(() => {
+    if (!$localhostEnabled) return;
+    void $localhostPorts;
+    const ids = localhostRelays.map((relay) => relay.id);
+    if (!ids.length) return;
+    for (const id of ids) refreshLocalhostAvailability(id);
+    const timer = setInterval(() => {
+      for (const id of ids) refreshLocalhostAvailability(id, true);
+    }, 60_000);
+    return () => clearInterval(timer);
+  });
 </script>
 
 <!-- Drawn rather than typed: the shipped Nerd Font is a terminal-sized
@@ -1118,13 +1140,13 @@
     <div class="empty-state" role="status">Waiting for relays…</div>
   {/if}
 
-  {#if localhostRelays.length}
+  {#if localhostCards.length}
     <section class="agent-section localhost-section" aria-labelledby="section-localhost">
       <h2 id="section-localhost" class="section-heading">
         <svg class="section-pin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"></path></svg>Localhost
       </h2>
       <div class="agent-grid">
-        {#each localhostRelays as relay (relay.id)}
+        {#each localhostCards as relay (relay.id)}
           <article class="agent-card localhost-card">
             <button
               class="agent-open"
@@ -1140,7 +1162,7 @@
                 <span class="agent-title-row">
                   <span class="agent-project">Localhost</span>
                 </span>
-                <span class="agent-meta">Browse ports 3000–3010 on {relay.label || relay.id}</span>
+                <span class="agent-meta">Live on {($localhostLivePorts.get(relay.id) || []).join(', ')} · {relay.label || relay.id}</span>
               </span>
             </button>
           </article>

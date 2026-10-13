@@ -70,7 +70,9 @@
     setTerminalRefreshInterval,
     setTerminalWakeLock,
     setLocalhostPorts,
+    setLocalhostEnabled,
     localhostPorts,
+    localhostEnabled,
     setTheme,
     terminalHeightLease,
     terminalWakeLock,
@@ -845,6 +847,13 @@
       {/each}
     </fieldset>
     <p class="hint">How often the relay checks the visible pane. 250 ms is balanced; faster refresh uses more computer and phone CPU during active output.</p>
+    <AppSwitch
+      checked={$localhostEnabled}
+      label="Localhost Viewer"
+      descriptionId="localhost-enabled-hint"
+      onchange={(value) => setLocalhostEnabled(value)}
+    />
+    <p class="hint" id="localhost-enabled-hint">On by default. When on, the agent list shows a Localhost card for each computer that has a running service, and the globe button opens the viewer. When off, every Localhost entry point disappears.</p>
     <label class="field-label settings-field" for="localhost-ports">Localhost Ports</label>
     <input
       id="localhost-ports"

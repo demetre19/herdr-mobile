@@ -5,6 +5,7 @@
  * phone-side command wrapper and content classification.
  */
 
+import { get, writable } from 'svelte/store';
 import { relayStore } from './store';
 import { localhostPorts } from './preferences';
 import { DEFAULT_LOCALHOST_PORTS } from './config';
@@ -66,4 +67,29 @@ export async function localhostPortUp(relayId: string, port: number): Promise<bo
   } catch {
     return false;
   }
+}
+
+/**
+ * Live ports per relay, cached so surfaces like the agent list can show
+ * Localhost entries only when something actually answers without scanning
+ * on every render. TTL-bounded; one scan in flight per relay.
+ */
+export const localhostLivePorts = writable<Map<string, number[]>>(new Map());
+
+const LOCALHOST_SCAN_TTL_MS = 60_000;
+const scansInFlight = new Set<string>();
+const scanCompletedAt = new Map<string, number>();
+
+export function refreshLocalhostAvailability(relayId: string, force = false): void {
+  if (!relayId || scansInFlight.has(relayId)) return;
+  if (!force && Date.now() - (scanCompletedAt.get(relayId) || 0) < LOCALHOST_SCAN_TTL_MS) return;
+  scansInFlight.add(relayId);
+  const ports = get(localhostPorts);
+  Promise.all(ports.map(async (port) => (await localhostPortUp(relayId, port)) ? port : null))
+    .then((results) => {
+      const live = results.filter((port): port is number => port !== null);
+      localhostLivePorts.update((current) => new Map(current).set(relayId, live));
+      scanCompletedAt.set(relayId, Date.now());
+    })
+    .finally(() => scansInFlight.delete(relayId));
 }

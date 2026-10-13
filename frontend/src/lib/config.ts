@@ -10,6 +10,7 @@ export const LEGACY_FONT_KEY = 'herdr_home_font_size';
 export const TERMINAL_HISTORY_KEY = 'herdr_terminal_history_lines';
 export const TERMINAL_REFRESH_KEY = 'herdr_terminal_refresh_ms';
 export const LOCALHOST_PORTS_KEY = 'herdr_localhost_ports';
+export const LOCALHOST_ENABLED_KEY = 'herdr_localhost_enabled';
 // Dev-server convention: the mosh-style default the viewer scans out of the box.
 export const DEFAULT_LOCALHOST_PORTS: number[] = Array.from({ length: 11 }, (_, i) => 3000 + i);
 export const LOCALHOST_PORTS_LIMIT = 32;

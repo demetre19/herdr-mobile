@@ -7,7 +7,7 @@
     localhostPortUp,
     type LocalhostContentKind,
   } from '$lib/localhost';
-  import { localhostPorts } from '$lib/preferences';
+  import { localhostPorts, localhostEnabled, setLocalhostEnabled } from '$lib/preferences';
   import { relayStore } from '$lib/store';
 
   interface RelayOption {
@@ -125,7 +125,12 @@
 </script>
 
 <div class="localhost-view">
-  {#if connectedRelays.length === 0}
+  {#if !$localhostEnabled}
+    <div class="localhost-empty">
+      <p>Localhost is turned off in Settings.</p>
+      <Button variant="ghost" onclick={() => setLocalhostEnabled(true)}>Turn on</Button>
+    </div>
+  {:else if connectedRelays.length === 0}
     <div class="localhost-empty">
       <p>No connected relay. Localhost browsing needs a connected computer.</p>
       <Button variant="ghost" onclick={() => probePorts(effectiveRelayId)}>Retry</Button>
