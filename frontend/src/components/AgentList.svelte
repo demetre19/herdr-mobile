@@ -20,6 +20,7 @@
   } from '$lib/agents';
   import { homeLayout, persistWorkspaceDisclosure, pinnedConversations, pinnedWorkspaces, reorderPinnedConversations, reorderPinnedWorkspaces, togglePinnedConversation, togglePinnedWorkspace } from '$lib/preferences';
   import { relayStore } from '$lib/store';
+  import { navigate } from '$lib/router';
   import type { Agent, RelayConfig, RelayConnectionView, RelayWorkspace } from '$lib/types';
   import { homeRelativePath, informativePath, workspaceGroupTrees, workspaceGroups, workspaceIdentity, workspaceProvenance, workspaceStateTone, type WorkspaceGroup, type WorkspaceGroupTree, type WorkspaceTab } from '$lib/workspaces';
 
@@ -54,6 +55,7 @@
     return connection?.status === 'connected' && connection.inventory.state === 'ready';
   }));
   const deferredRelays = $derived(relays.filter((relay) => connections.get(relay.id)?.pairingDeferred));
+  const localhostRelays = $derived(relays.filter((relay) => connections.get(relay.id)?.status === 'connected'));
   // Agent pane → its workspace's linked-worktree checkout root, so a pane
   // running inside ANY checkout gets the white tail regardless of where the
   // checkout lives (metadata beats path guessing).
@@ -1114,6 +1116,37 @@
     </div>
   {:else if !agents.length && !unavailableRelays.length}
     <div class="empty-state" role="status">Waiting for relays…</div>
+  {/if}
+
+  {#if localhostRelays.length}
+    <section class="agent-section localhost-section" aria-labelledby="section-localhost">
+      <h2 id="section-localhost" class="section-heading">
+        <svg class="section-pin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"></path></svg>Localhost
+      </h2>
+      <div class="agent-grid">
+        {#each localhostRelays as relay (relay.id)}
+          <article class="agent-card localhost-card">
+            <button
+              class="agent-open"
+              aria-label={`Browse localhost services on ${relay.label || relay.id}`}
+              onclick={() => navigate({ view: 'localhost', relayId: relay.id })}
+            >
+              <span class="agent-identity">
+                <svg class="agent-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                  <circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"></path>
+                </svg>
+              </span>
+              <span class="agent-copy">
+                <span class="agent-title-row">
+                  <span class="agent-project">Localhost</span>
+                </span>
+                <span class="agent-meta">Browse ports 3000–3010 on {relay.label || relay.id}</span>
+              </span>
+            </button>
+          </article>
+        {/each}
+      </div>
+    </section>
   {/if}
 
   {#if pinnedConversationAgents.length}

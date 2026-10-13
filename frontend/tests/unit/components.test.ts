@@ -765,7 +765,7 @@ describe('accessible Svelte interactions', () => {
     expect(screen.getByRole('status', { name: 'Fedora agent inventory unavailable' })).toHaveTextContent('live-handoff');
     expect(screen.getByRole('button', { name: 'Approve once' })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Open relay on Fedora/ })).toBeDisabled();
-    expect(container.querySelector('.agent-card')).toHaveClass('stale');
+    expect(container.querySelector('.agent-card.stale')).not.toBeNull();
     expect(screen.queryByText('No chat agents are running.')).not.toBeInTheDocument();
   });
 
