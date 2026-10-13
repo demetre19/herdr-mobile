@@ -2,6 +2,8 @@ import { render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import LocalhostView from '$components/LocalhostView.svelte';
+import { DEFAULT_LOCALHOST_PORTS } from '$lib/config';
+import { localhostPorts } from '$lib/preferences';
 import { relayStore } from '$lib/store';
 import type { RelayConfig } from '$lib/types';
 
@@ -24,6 +26,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   relayStore.relayConfigs.set([]);
   relayStore.connections.set(new Map());
+  localhostPorts.set([...DEFAULT_LOCALHOST_PORTS]);
 });
 
 describe('localhost viewer', () => {
@@ -44,10 +47,10 @@ describe('localhost viewer', () => {
 
     render(LocalhostView, { relayId: 'relay-a' });
 
-    // Port 3000 comes up, the rest stay down.
-    await waitFor(() => expect(screen.getByRole('button', { name: /Port 3000, service available/ })).toBeTruthy());
-    expect(screen.getByRole('button', { name: 'Port 3000, service available' }).className).toContain('up');
-    expect(screen.getByRole('button', { name: 'Port 3001' }).className).toContain('down');
+    // Only the live port renders a chip; dead ports never appear.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Port 3000, service available' })).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Port 3001, service available' })).toBeNull();
+    expect(screen.queryByText(/Scanning/)).toBeNull();
 
     await userEvent.click(screen.getByRole('button', { name: 'Port 3000, service available' }));
     await waitFor(() => expect(screen.getByTitle('Localhost page from port 3000')).toBeTruthy());
@@ -86,5 +89,37 @@ describe('localhost viewer', () => {
     relayStore.connections.set(new Map());
     render(LocalhostView, {});
     expect(screen.getByText(/No connected relay/)).toBeTruthy();
+  });
+
+  it('scans only the configured port list', async () => {
+    relayStore.relayConfigs.set([relayConfig('relay-a', 'Mac mini')]);
+    relayStore.connections.set(new Map([['relay-a', connectedStatus()]]));
+    localhostPorts.set([4000, 8080]);
+    const probed: number[] = [];
+    vi.spyOn(relayStore, 'sendCommand').mockImplementation((_relayId: string, payload: Record<string, unknown>) => {
+      probed.push(Number(payload.port));
+      return Promise.reject(new Error(`No service responded on port ${payload.port}`));
+    });
+
+    render(LocalhostView, { relayId: 'relay-a' });
+    await waitFor(() => expect(screen.getByText(/No services answered/)).toBeTruthy());
+    expect(probed.sort((a, b) => a - b)).toEqual([4000, 8080]);
+    expect(screen.queryByRole('button', { name: /Port 3000/ })).toBeNull();
+  });
+
+  it('shows a live port outside the default range', async () => {
+    relayStore.relayConfigs.set([relayConfig('relay-a', 'Mac mini')]);
+    relayStore.connections.set(new Map([['relay-a', connectedStatus()]]));
+    localhostPorts.set([5173]);
+    vi.spyOn(relayStore, 'sendCommand').mockResolvedValue({
+      ok: true,
+      phase: 'completed',
+      data: { status: 200, content_type: 'text/html', body: btoa('<html>vite</html>'), truncated: false },
+    } as never);
+
+    render(LocalhostView, { relayId: 'relay-a' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Port 5173, service available' })).toBeTruthy());
+    await userEvent.click(screen.getByRole('button', { name: 'Port 5173, service available' }));
+    await waitFor(() => expect(screen.getByTitle('Localhost page from port 5173')).toBeTruthy());
   });
 });

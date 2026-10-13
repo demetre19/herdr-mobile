@@ -6,8 +6,10 @@
  */
 
 import { relayStore } from './store';
+import { localhostPorts } from './preferences';
+import { DEFAULT_LOCALHOST_PORTS } from './config';
 
-export const LOCALHOST_PORTS: number[] = Array.from({ length: 11 }, (_, i) => 3000 + i);
+export const LOCALHOST_PORTS: number[] = DEFAULT_LOCALHOST_PORTS;
 
 export type LocalhostContentKind = 'html' | 'json' | 'text' | 'binary';
 

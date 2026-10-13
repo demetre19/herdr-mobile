@@ -24,6 +24,10 @@ import {
   TERMINAL_WAKE_LOCK_KEY,
   TERMINAL_REFRESH_KEY,
   TERMINAL_REFRESH_OPTIONS,
+  LOCALHOST_PORTS_KEY,
+  LOCALHOST_PORTS_LIMIT,
+  DEFAULT_LOCALHOST_PORTS,
+  parseLocalhostPorts,
   THEME_COLORS,
   THEME_KEY,
   THEMES,
@@ -130,6 +134,10 @@ function savedTerminalRefreshInterval(): TerminalRefreshInterval {
     : 250;
 }
 
+function savedLocalhostPorts(): number[] {
+  return parseLocalhostPorts(localStorage.getItem(LOCALHOST_PORTS_KEY));
+}
+
 // Mixed by default: one card per workspace with a state dot reads better than
 // three state sections once workspaces carry worktrees, and agents needing
 // input stay on top in both layouts.
@@ -149,6 +157,7 @@ export const interfaceSize = writable<InterfaceSize>(savedInterfaceSize());
 export const terminalHistoryLines = writable<TerminalHistoryLines>(savedTerminalHistoryLines());
 export const terminalRefreshInterval = writable<TerminalRefreshInterval>(savedTerminalRefreshInterval());
 export const homeLayout = writable<HomeLayout>(savedHomeLayout());
+export const localhostPorts = writable<number[]>(savedLocalhostPorts());
 // Off by default: resizing the shared pane's height strands stale copies of
 // inline agents' status bars in the scrollback (the terminal reflows the
 // primary buffer before the agent can repaint), so only people who need
@@ -347,6 +356,16 @@ export function setTerminalWakeLock(value: boolean): void {
 export function setHomeLayout(value: HomeLayout): void {
   localStorage.setItem(HOME_LAYOUT_KEY, value);
   homeLayout.set(value);
+}
+
+export function setLocalhostPorts(value: number[]): void {
+  const ports = value
+    .filter((port) => Number.isInteger(port) && port >= 1 && port <= 65535)
+    .slice(0, LOCALHOST_PORTS_LIMIT);
+  const unique = [...new Set(ports)].sort((a, b) => a - b);
+  const next = unique.length ? unique : [...DEFAULT_LOCALHOST_PORTS];
+  localStorage.setItem(LOCALHOST_PORTS_KEY, next.join(','));
+  localhostPorts.set(next);
 }
 
 

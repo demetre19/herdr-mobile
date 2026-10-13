@@ -9,6 +9,24 @@ export const INTERFACE_SIZE_KEY = 'herdr_terminal_font_size';
 export const LEGACY_FONT_KEY = 'herdr_home_font_size';
 export const TERMINAL_HISTORY_KEY = 'herdr_terminal_history_lines';
 export const TERMINAL_REFRESH_KEY = 'herdr_terminal_refresh_ms';
+export const LOCALHOST_PORTS_KEY = 'herdr_localhost_ports';
+// Dev-server convention: the mosh-style default the viewer scans out of the box.
+export const DEFAULT_LOCALHOST_PORTS: number[] = Array.from({ length: 11 }, (_, i) => 3000 + i);
+export const LOCALHOST_PORTS_LIMIT = 32;
+
+/**
+ * Parses the stored localhost port list: comma/space separated integers in
+ * 1–65535, deduped, sorted, capped. Anything invalid or empty falls back to
+ * the default range rather than an unusable empty list.
+ */
+export function parseLocalhostPorts(raw: string | null | undefined): number[] {
+  if (raw === null || raw === undefined) return [...DEFAULT_LOCALHOST_PORTS];
+  const ports = [...new Set(
+    raw.split(/[\s,]+/).filter(Boolean).map((token) => Number(token)),
+  )].filter((port) => Number.isInteger(port) && port >= 1 && port <= 65535).sort((a, b) => a - b);
+  if (!ports.length) return [...DEFAULT_LOCALHOST_PORTS];
+  return ports.slice(0, LOCALHOST_PORTS_LIMIT);
+}
 export const TERMINAL_HEIGHT_LEASE_KEY = 'herdr_terminal_height_lease';
 export const TERMINAL_WAKE_LOCK_KEY = 'herdr_terminal_wake_lock';
 export const HOME_LAYOUT_KEY = 'herdr_home_workspace_layout';

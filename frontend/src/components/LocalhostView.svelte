@@ -2,12 +2,12 @@
   import { onDestroy } from 'svelte';
   import Button from '$components/ui/Button.svelte';
   import {
-    LOCALHOST_PORTS,
     classifyLocalhostContent,
     localhostFetch,
     localhostPortUp,
     type LocalhostContentKind,
   } from '$lib/localhost';
+  import { localhostPorts } from '$lib/preferences';
   import { relayStore } from '$lib/store';
 
   interface RelayOption {
@@ -35,6 +35,7 @@
   type PortState = 'checking' | 'up' | 'down';
   let selectedRelayId = $state('');
   let portStates = $state<Record<number, PortState>>({});
+  let scanning = $state(true);
   let activePort = $state<number | null>(null);
   let activePath = $state('/');
   let loading = $state(false);
@@ -48,15 +49,24 @@
   const effectiveRelayId = $derived(
     relayId || selectedRelayId || connectedRelays[0]?.id || '',
   );
+  const configuredPorts = $derived($localhostPorts);
+  const upPorts = $derived(configuredPorts.filter((port) => portStates[port] === 'up'));
+  const scanPending = $derived(configuredPorts.some((port) => portStates[port] === 'checking'));
 
+  // Probe when the effective relay or the configured port list changes. The
+  // signature guard keeps unrelated reactivity from re-scanning, and keeps
+  // two effects from both firing probePorts on mount (the second would bump
+  // the generation and discard the first's results).
+  let probedSignature = $state('');
   $effect.pre(() => {
-    const nextRelay = effectiveRelayId;
-    if (nextRelay && nextRelay !== selectedRelayId) {
-      selectedRelayId = nextRelay;
-      activePort = null;
-      clearResponse();
-      probePorts(nextRelay);
-    }
+    const relay = effectiveRelayId;
+    const signature = `${relay}|${configuredPorts.join(',')}`;
+    if (!relay || signature === probedSignature) return;
+    probedSignature = signature;
+    selectedRelayId = relay;
+    activePort = null;
+    clearResponse();
+    probePorts(relay);
   });
 
   function clearResponse(): void {
@@ -69,12 +79,14 @@
 
   async function probePorts(relay: string): Promise<void> {
     const generation = ++probeGeneration;
-    portStates = Object.fromEntries(LOCALHOST_PORTS.map((port) => [port, 'checking']));
-    await Promise.all(LOCALHOST_PORTS.map(async (port) => {
+    scanning = true;
+    portStates = Object.fromEntries(configuredPorts.map((port) => [port, 'checking']));
+    await Promise.all(configuredPorts.map(async (port) => {
       const up = await localhostPortUp(relay, port);
       if (generation !== probeGeneration) return;
       portStates = { ...portStates, [port]: up ? 'up' : 'down' };
     }));
+    if (generation === probeGeneration) scanning = false;
   }
 
   async function load(port: number, path: string): Promise<void> {
@@ -131,15 +143,14 @@
       </div>
     {/if}
 
-    <div class="localhost-ports" aria-label="Localhost ports 3000 to 3010">
-      {#each LOCALHOST_PORTS as port (port)}
+    <div class="localhost-ports" aria-label="Localhost ports">
+      {#if scanPending}<span class="localhost-scan" role="status">Scanning…</span>{/if}
+      {#each upPorts as port (port)}
         <button
-          class="localhost-port-chip"
-          class:up={portStates[port] === 'up'}
-          class:down={portStates[port] === 'down'}
+          class="localhost-port-chip up"
           class:active={activePort === port}
-          disabled={portStates[port] !== 'up' || loading}
-          aria-label={`Port ${port}${portStates[port] === 'up' ? ', service available' : ''}`}
+          disabled={loading}
+          aria-label={`Port ${port}, service available`}
           onclick={() => load(port, activePort === port ? activePath : '/')}
         >
           <span class="localhost-port-dot" aria-hidden="true"></span>:{port}
@@ -151,6 +162,12 @@
         </svg>
       </Button>
     </div>
+
+    {#if !scanPending && !upPorts.length && activePort === null && !loading}
+      <div class="localhost-empty">
+        <p>No services answered on the configured ports. Start one on this computer, or edit the port list in Settings → Localhost Ports.</p>
+      </div>
+    {/if}
 
     {#if loading}
       <div class="localhost-status" role="status">Loading :{activePort}{activePath}…</div>
@@ -177,7 +194,7 @@
       <div class="localhost-status">:{activePort} returned an empty response</div>
     {:else}
       <div class="localhost-empty">
-        <p>Pick a port with a green dot to browse the service running on this computer.</p>
+        <p>Pick a port above to browse the service running on this computer.</p>
       </div>
     {/if}
   {/if}

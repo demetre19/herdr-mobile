@@ -27,6 +27,7 @@
     TERMINAL_HISTORY_OPTIONS,
     TERMINAL_REFRESH_LABELS,
     TERMINAL_REFRESH_OPTIONS,
+    parseLocalhostPorts,
     THEME_LABELS,
     THEMES,
     type AgentView,
@@ -68,6 +69,8 @@
     setTerminalHistoryLines,
     setTerminalRefreshInterval,
     setTerminalWakeLock,
+    setLocalhostPorts,
+    localhostPorts,
     setTheme,
     terminalHeightLease,
     terminalWakeLock,
@@ -166,6 +169,13 @@
   const appUpdate = appUpdateStatus;
   let previousAppUpdate = $state<AppUpdateStatus | null>(null);
   let checkingUpdates = $state(false);
+  let localhostPortsDraft = $state($localhostPorts.join(', '));
+
+  function commitLocalhostPorts(event: Event): void {
+    const input = event.currentTarget as HTMLInputElement;
+    setLocalhostPorts(parseLocalhostPorts(input.value));
+    localhostPortsDraft = $localhostPorts.join(', ');
+  }
   const appUpdateChecking = $derived(checkingUpdates || $appUpdate.state === 'checking');
   const appUpdateForLayout = $derived(
     appUpdateChecking && previousAppUpdate ? previousAppUpdate : $appUpdate,
@@ -835,6 +845,16 @@
       {/each}
     </fieldset>
     <p class="hint">How often the relay checks the visible pane. 250 ms is balanced; faster refresh uses more computer and phone CPU during active output.</p>
+    <label class="field-label settings-field" for="localhost-ports">Localhost Ports</label>
+    <input
+      id="localhost-ports"
+      type="text"
+      inputmode="numeric"
+      autocomplete="off"
+      bind:value={localhostPortsDraft}
+      onchange={commitLocalhostPorts}
+    />
+    <p class="hint">Ports the Localhost viewer scans on each computer, comma separated (currently: {$localhostPorts.join(', ')}). Only ports with a running service appear in the viewer. Requests always stay on the computer's own 127.0.0.1 loopback interface.</p>
     <p class="hint">Resize Session automatically leases the shared terminal at the phone width while it is open, so the laptop view changes too. The previous width is restored when the terminal closes or disconnects.</p>
     <AppSwitch
       checked={$terminalHeightLease}

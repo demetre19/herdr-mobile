@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { classifyLocalhostContent, localhostFetch, localhostPortUp, LOCALHOST_PORTS } from '$lib/localhost';
+import { parseLocalhostPorts } from '$lib/config';
 import { relayStore } from '$lib/store';
 
 afterEach(() => {
@@ -65,7 +66,16 @@ describe('localhost port probe', () => {
 });
 
 describe('localhost port range', () => {
-  it('covers exactly 3000 through 3010', () => {
+  it('defaults to exactly 3000 through 3010', () => {
     expect(LOCALHOST_PORTS).toEqual([3000, 3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 3009, 3010]);
+  });
+  it('parses the stored port list: dedupe, sort, validate, default fallback', () => {
+    expect(parseLocalhostPorts(null)).toEqual(LOCALHOST_PORTS);
+    expect(parseLocalhostPorts(undefined)).toEqual(LOCALHOST_PORTS);
+    expect(parseLocalhostPorts('')).toEqual(LOCALHOST_PORTS);
+    expect(parseLocalhostPorts('abc')).toEqual(LOCALHOST_PORTS);
+    expect(parseLocalhostPorts('8080, 3000,3000 5173')).toEqual([3000, 5173, 8080]);
+    expect(parseLocalhostPorts('0, 65536, -1, 4000')).toEqual([4000]);
+    expect(parseLocalhostPorts(Array.from({ length: 40 }, (_, i) => 10000 + i).join(','))).toHaveLength(32);
   });
 });

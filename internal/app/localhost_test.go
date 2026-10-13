@@ -43,20 +43,23 @@ func TestValidateLocalhostPath(t *testing.T) {
 }
 
 func TestValidateLocalhostPort(t *testing.T) {
-	for port := range localhostMinPort {
-		if err := validateLocalhostPort(port); err == nil {
-			t.Errorf("port %d below range should fail", port)
-		}
+	if err := validateLocalhostPort(0); err == nil {
+		t.Error("port 0 should fail")
 	}
-	for port := localhostMinPort; port <= localhostMaxPort; port++ {
-		if err := validateLocalhostPort(port); err != nil {
-			t.Errorf("port %d inside range should pass, got %v", port, err)
-		}
+	if err := validateLocalhostPort(3000); err != nil {
+		t.Errorf("port 3000 should pass, got %v", err)
 	}
-	for port := localhostMaxPort + 1; port <= localhostMaxPort+10; port++ {
-		if err := validateLocalhostPort(port); err == nil {
-			t.Errorf("port %d above range should fail", port)
-		}
+	if err := validateLocalhostPort(8080); err != nil {
+		t.Errorf("port 8080 should pass, got %v", err)
+	}
+	if err := validateLocalhostPort(65535); err != nil {
+		t.Errorf("port 65535 should pass, got %v", err)
+	}
+	if err := validateLocalhostPort(65536); err == nil {
+		t.Error("port 65536 should fail")
+	}
+	if err := validateLocalhostPort(-1); err == nil {
+		t.Error("negative port should fail")
 	}
 }
 

@@ -14,8 +14,8 @@ import (
 	"github.com/coder/websocket"
 )
 
-// bindLocalhostPort grabs a listener on a specific port inside the allowed
-// 3000-3010 dev-server range.
+// bindLocalhostPort grabs a listener on a specific port inside the default
+// 3000-3010 dev-server range (the phone's default setting).
 func bindLocalhostPort(t *testing.T) (net.Listener, int) {
 	t.Helper()
 	for port := 3000; port <= 3010; port++ {
@@ -28,6 +28,7 @@ func bindLocalhostPort(t *testing.T) (net.Listener, int) {
 	t.Skip("every port 3000-3010 is already in use")
 	return nil, 0
 }
+
 
 func TestLocalHTTPFetch(t *testing.T) {
 	ln, port := bindLocalhostPort(t)
@@ -103,7 +104,7 @@ func TestLocalHTTPFetchRejectsOutOfRangePort(t *testing.T) {
 		"action":     "local_http_fetch",
 		"request_id": "localhost-req-2",
 		"protocol":   3,
-		"port":       8080,
+		"port":       0,
 		"path":       "/",
 	}
 	data, _ := json.Marshal(command)
@@ -118,7 +119,6 @@ func TestLocalHTTPFetchRejectsOutOfRangePort(t *testing.T) {
 	if msg["ok"] != false {
 		t.Fatal("out-of-range port must be refused")
 	}
-	if errorText, _ := msg["error"].(string); errorText != "Port must be between 3000 and 3010" {
+	if errorText, _ := msg["error"].(string); errorText != "Port must be between 1 and 65535" {
 		t.Errorf("error = %q", errorText)
-	}
-}
+	}}

@@ -18,14 +18,14 @@ import (
 // machine's loopback interface. The surface is deliberately narrow:
 //
 //   - host is always the literal 127.0.0.1 (no DNS, no LAN, no internet)
-//   - ports are restricted to a small dev-server range
 //   - GET only, bounded body size, bounded duration
 //
-// Widening any of these turns a paired phone credential into an SSRF pivot,
-// so keep the restrictions unless a real need shows up.
+// The visible port list is the phone's Localhost Ports setting; any valid
+// TCP port is served. Widening the HOST beyond loopback would turn a paired
+// phone credential into an SSRF pivot — keep that restriction.
 const (
-	localhostMinPort          = 3000
-	localhostMaxPort          = 3010
+	localhostMinPort          = 1
+	localhostMaxPort          = 65535
 	localhostFetchTimeout     = 10 * time.Second
 	localhostMaxResponseBytes = 2 << 20 // 2 MiB
 )
