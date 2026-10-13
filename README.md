@@ -25,6 +25,28 @@ read aloud — all end-to-end encrypted.
   <img src="docs/screenshots/home.jpg" alt="Home screen with pinned conversations and workspaces" width="24%">
 </p>
 
+## Localhost viewer — browse your computer's web UIs from the phone
+
+The flagship fork feature: any dev server, dashboard, or admin UI listening on
+a computer's `127.0.0.1` loopback interface is browsable from the phone — no
+Cloudflare tunnels, no exposed ports, no per-service setup. Start anything on
+`localhost:3000` on your Mac and it appears in the phone's agent list as a
+Localhost card within a minute.
+
+- **Zero exposure** — the phone asks the relay to fetch
+  `http://127.0.0.1:<port>/…` over the existing end-to-end-encrypted channel.
+  The relay's dial hook refuses any non-loopback address, so the feature
+  cannot reach your LAN or the internet; the gateway never sees plaintext.
+- **Only what's alive** — the viewer scans your configured ports and shows
+  only the ones actually answering; the agent list shows a Localhost card
+  only for computers with a running service. Dead entries never appear.
+- **Configurable** — Settings → Localhost Viewer toggles the whole feature;
+  Settings → Localhost Ports sets the scanned port list (default
+  `3000–3010`, any valid TCP port allowed).
+- **Sandboxed rendering** — HTML renders in a fully sandboxed iframe (no
+  scripts, no same-origin access to the app); JSON and text render as
+  pretty-printed preformatted blocks.
+
 ## How it works
 
 Three pieces cooperate:
@@ -133,6 +155,10 @@ never leave the relays and the phone.
 
 Everything upstream does, plus:
 
+- **Localhost viewer** — browse loopback web UIs (dev servers, dashboards)
+  on any connected computer from the phone; loopback-only, sandboxed, with
+  a Settings toggle and configurable port list. See
+  [Localhost viewer](#localhost-viewer--browse-your-computers-web-uis-from-the-phone).
 - **Pinned conversations** — pin any agent card to a dedicated section at the
   top of the home screen so the threads you care about never scroll away.
 - **Pinned workspaces** — pin whole workspaces to the top as well; pinned
