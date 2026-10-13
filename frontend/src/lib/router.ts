@@ -12,6 +12,7 @@ export type ViewState =
   | { view: 'launch'; relayId?: string; workspaceId?: string; cwd?: string }
   | { view: 'activity' }
   | { view: 'activity_detail'; key: string }
+  | { view: 'localhost'; relayId?: string }
   | { view: 'terminal'; paneId: string; target?: FrontendTargetRef }
   | {
     view: 'history';
@@ -55,6 +56,7 @@ export function stateFromLocation(locationValue: Pick<Location, 'hash'> = locati
     }
   }
   if (locationValue.hash === '#activity') return { view: 'activity' };
+  if (locationValue.hash === '#localhost') return { view: 'localhost' };
   const activityDetail = locationValue.hash.match(/^#activity=(.+)$/);
   if (activityDetail) {
     try {
@@ -117,6 +119,7 @@ export function viewUrl(state: ViewState): string {
     }))}`;
   }
   if (state.view === 'activity') return '#activity';
+  if (state.view === 'localhost') return '#localhost';
   if (state.view === 'activity_detail') return `#activity=${encodeURIComponent(state.key)}`;
   if (state.view === 'terminal') {
     const target = state.target && encodeTargetRoute(state.target);

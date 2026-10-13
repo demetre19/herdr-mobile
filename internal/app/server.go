@@ -978,6 +978,8 @@ func (s *Server) Run(ctx context.Context) error {
 			home, _ := os.UserHomeDir()
 			listing := fsutil.ListDirectories(path, home)
 			s.sendCommandResult(client, requestID, "list_directories", true, "completed", "", "", listing)
+		case "local_http_fetch":
+			s.handleLocalhostFetch(client, msg)
 		case "list_slash_commands":
 			requestID, _ := msg["request_id"].(string)
 			paneID, _ := msg["pane_id"].(string)

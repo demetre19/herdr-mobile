@@ -4,6 +4,7 @@
   import ActivityDetail from '$components/ActivityDetail.svelte';
   import BrandLogo from '$components/ui/BrandLogo.svelte';
   import ActivityView from '$components/ActivityView.svelte';
+  import LocalhostView from '$components/LocalhostView.svelte';
   import AgentList from '$components/AgentList.svelte';
   import AgentRail from '$components/AgentRail.svelte';
   import LaunchView from '$components/LaunchView.svelte';
@@ -198,6 +199,7 @@
     if ($currentView.view === 'launch') return 'Start Agent';
     if ($currentView.view === 'activity') return 'Activity';
     if ($currentView.view === 'activity_detail') return 'Activity';
+    if ($currentView.view === 'localhost') return 'Localhost';
     if (activeAgent) return tabName(activeAgent) || activeAgent.project || displayName(activeAgent);
     if ($currentView.view === 'terminal') return 'Terminal';
     return 'herdr';
@@ -509,7 +511,7 @@
     };
   }
 
-  function toggle(view: 'settings' | 'launch' | 'activity' | 'workspaces') {
+  function toggle(view: 'settings' | 'launch' | 'activity' | 'workspaces' | 'localhost') {
     if ($currentView.view === view) closeCurrentView();
     else navigate({ view });
   }
@@ -723,9 +725,15 @@
         </Button>
         <Button variant="ghost" size="icon" aria-label="Start agent" onclick={() => toggle('launch')}>＋</Button>
         <Button variant="ghost" size="icon" aria-label="Activity history" onclick={() => toggle('activity')}>
-          <svg class="header-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <svg class="header-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="9"></circle>
             <path d="M12 7v5l3 2"></path>
+          </svg>
+        </Button>
+        <Button variant="ghost" size="icon" aria-label="Browse localhost services" title="Browse localhost services on a connected computer" onclick={() => toggle('localhost')}>
+          <svg class="header-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"></path>
           </svg>
         </Button>
       {/if}
@@ -741,6 +749,10 @@
     </nav>
     </div>
   </header>
+
+  {#if $currentView.view === 'localhost'}
+    <LocalhostView relayId={$currentView.relayId || ''} />
+  {/if}
 
   {#if $currentView.view === 'settings'}
     <SettingsView {readOnlyRelayIds} />
