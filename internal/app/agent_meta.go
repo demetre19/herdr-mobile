@@ -41,6 +41,11 @@ type agentRuntimeMeta struct {
 	// resumed cache entry knows whether role is authoritative or must
 	// be recomputed from launchRole on the next file change.
 	roleLive bool
+	// launchProbe is the last attempt at the launch-argv lookup. Only
+	// the uncertain state (no role from either source) goes stale, so
+	// a transient process-info failure retries instead of wedging the
+	// lane at "default" through every page refresh.
+	launchProbe time.Time
 }
 
 // sessionMetaEntry is the subset of a session entry needed to track what the
@@ -55,6 +60,13 @@ type sessionMetaEntry struct {
 }
 
 const agentMetaReadLimit = 64 << 20
+
+// launchRoleRetryInterval throttles re-probes of panes whose role is still
+// uncertain (no JSONL role and no launch selector found): a bare `omp`
+// launch answers permanently empty, so retrying every 2s poll would spawn
+// process-info forever for zero benefit. Settled panes never re-probe
+// within a session file — the launch argv is stable there.
+const launchRoleRetryInterval = time.Minute
 
 // launchRoleFromArgv recovers the role from an omp launch command line
 // (`--model pi/<role>`, the only form the prd-herdr spawn contract allows).
@@ -132,7 +144,15 @@ func (s *Server) resolveAgentRuntimeMeta(ctx context.Context, agentAgent string,
 	s.metaMu.Lock()
 	cached, ok := s.metaCache[paneID]
 	s.metaMu.Unlock()
-	if ok && cached.sessionPath == sessionPath && cached.modTime.Equal(info.ModTime()) {
+	// An uncertain entry (no role from file or launch argv) goes stale
+	// after launchRoleRetryInterval: a failed lookup must not wedge an
+	// idle lane at the profile default through every page refresh, but
+	// a permanently-empty answer (bare launch, finished pane) must not
+	// respawn process-info on every 2s poll either. Settled entries stay
+	// cached on (path, mtime) as before.
+	if ok && cached.sessionPath == sessionPath && cached.modTime.Equal(info.ModTime()) &&
+		(cached.roleLive || cached.launchRole != "" ||
+			time.Since(cached.launchProbe) < launchRoleRetryInterval) {
 		return cached
 	}
 	offset := int64(0)
@@ -164,9 +184,14 @@ func (s *Server) resolveAgentRuntimeMeta(ctx context.Context, agentAgent string,
 	}
 	// The launch role is process state, not file state: look it up only
 	// while the JSONL records no role, and cache the answer alongside
-	// the file offset so a later model_change still overrides it.
+	// the file offset so a later model_change still overrides it. Every
+	// attempt stamps launchProbe so permanently-empty answers (bare
+	// launch, finished pane) throttle to one probe per retry interval
+	// instead of one per poll.
+	launchProbe := cached.launchProbe
 	if !roleLive && launchRole == "" && ctx != nil && s.herdrC != nil {
 		launchRole = launchRoleFromArgv(launchArgvForPane(ctx, s.herdrC, paneID))
+		launchProbe = time.Now()
 	}
 	displayRole := role
 	if displayRole == "" {
@@ -178,7 +203,7 @@ func (s *Server) resolveAgentRuntimeMeta(ctx context.Context, agentAgent string,
 	meta := agentRuntimeMeta{
 		sessionPath: sessionPath, modTime: info.ModTime(), size: info.Size(),
 		offset: newOffset, role: displayRole, model: model, effort: effort,
-		launchRole: launchRole, roleLive: roleLive,
+		launchRole: launchRole, roleLive: roleLive, launchProbe: launchProbe,
 	}
 	s.metaMu.Lock()
 	if s.metaCache == nil {

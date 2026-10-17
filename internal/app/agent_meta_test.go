@@ -122,6 +122,30 @@ func TestResolveMetaDefaultsWithoutLaunchLookup(t *testing.T) {
 	}
 }
 
+// An uncertain cache entry (failed launch lookup, idle session file) must
+// re-probe instead of wedging at the profile default: this is the page-
+// refresh path for lanes that went quiet before the fix deployed.
+func TestResolveMetaUncertainEntryRetries(t *testing.T) {
+	path := writeMetaSession(t,
+		`{"type":"session","version":3}`,
+		`{"type":"model_change","model":"devin/swe-2"}`,
+	)
+	server := testServer()
+	first := server.resolveAgentRuntimeMeta(context.Background(), "omp", "pane-1", path)
+	if first.role != "default" || first.roleLive || first.launchRole != "" {
+		t.Fatalf("first resolve = %+v, want uncertain default", first)
+	}
+	// A fresh poll with no file change must still return the cached
+	// entry (probe throttled), not respawn the lookup each time.
+	second := server.resolveAgentRuntimeMeta(context.Background(), "omp", "pane-1", path)
+	if second.role != "default" {
+		t.Fatalf("second resolve role = %q, want cached %q", second.role, "default")
+	}
+	if !second.launchProbe.Equal(first.launchProbe) {
+		t.Fatal("uncertain entry re-probed before the retry interval")
+	}
+}
+
 // The resolver honors the same precedence the fallback implements: a
 // JSONL-recorded role (mid-session switch) is live state and must never be
 // overwritten by the launch fallback — covered here at the parse layer the
