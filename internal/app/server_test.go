@@ -211,7 +211,7 @@ func TestBroadcastAgentIdentitySatisfiesExactTargetValidation(t *testing.T) {
 		Agent: "omp", Status: "working",
 		Session: "/home/user/.omp/agent/sessions/-work/2026-08-30T19-57-25-194Z_x.jsonl",
 	}
-	server.resolveAgentSessionName(agent)
+	server.resolveAgentSessionName(context.Background(), agent)
 	server.state.CommitInventory([]*coordinator.AgentState{agent}, server.state.RevisionCounter())
 
 	data, err := json.Marshal(server.state.Snapshot())
@@ -292,14 +292,14 @@ func TestResolveAgentSessionName(t *testing.T) {
 	// named carries a canonical session id with both an index record and the
 	// rollout the reader would serve, the shape Locate requires post round-3.
 	named := &coordinator.AgentState{Agent: "codex", Session: codexSessionID}
-	s.resolveAgentSessionName(named)
+	s.resolveAgentSessionName(context.Background(), named)
 	if named.SessionName != "current-session" || named.Session != "current-session" ||
 		named.SessionID != codexSessionID || !named.ConversationHistoryAvailable {
 		t.Fatalf("named session = %#v, want resolved display name and retained history identity", named)
 	}
 
 	unnamed := &coordinator.AgentState{Agent: "codex", Session: "missing-session"}
-	s.resolveAgentSessionName(unnamed)
+	s.resolveAgentSessionName(context.Background(), unnamed)
 	if unnamed.SessionName != "" || unnamed.Session != "missing-session" ||
 		unnamed.SessionID != "missing-session" || !unnamed.ConversationHistoryAvailable {
 		t.Fatalf("unnamed session = %#v, want preserved history identity", unnamed)
@@ -326,7 +326,7 @@ func TestResolveAgentSessionNameTrimsWhitespaceOnlySession(t *testing.T) {
 	s.sessions = session.NewResolver(home)
 
 	agent := &coordinator.AgentState{Agent: "claude", Cwd: cwd, Session: "   "}
-	s.resolveAgentSessionName(agent)
+	s.resolveAgentSessionName(context.Background(), agent)
 	if agent.SessionName != "" {
 		t.Fatalf("SessionName = %q, want empty for a whitespace-only session", agent.SessionName)
 	}

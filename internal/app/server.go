@@ -507,7 +507,7 @@ func projectContextForAgent(agent *coordinator.AgentState) conversation.ProjectC
 	})
 }
 
-func (s *Server) resolveAgentSessionName(agent *coordinator.AgentState) {
+func (s *Server) resolveAgentSessionName(ctx context.Context, agent *coordinator.AgentState) {
 	if agent == nil {
 		return
 	}
@@ -528,11 +528,12 @@ func (s *Server) resolveAgentSessionName(agent *coordinator.AgentState) {
 	// phone must echo it back for exact-target validation to ever pass.
 	agent.AgentSessionID = sessionID
 	agent.ConversationHistoryAvailable = sessionID != "" && conversation.Supported(agent.Agent)
-	// OMP panes carry their role/model/effort in the session JSONL; resolve it
+	// OMP panes carry their model/effort in the session JSONL; resolve them
 	// from the path while Session is still the path (SessionNameWithProject
-	// may overwrite it with a display title below).
+	// may overwrite it with a display title below). The role comes from a
+	// mid-session model_change when present, else the pane's launch argv.
 	if strings.HasSuffix(sessionID, ".jsonl") {
-		meta := s.resolveAgentRuntimeMeta(agent.Agent, agent.PaneID, sessionID)
+		meta := s.resolveAgentRuntimeMeta(ctx, agent.Agent, agent.PaneID, sessionID)
 		agent.AgentRole = meta.role
 		agent.AgentModel = meta.model
 		agent.AgentEffort = meta.effort
@@ -1289,7 +1290,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	s.poller.SetEnrich(func(ctx context.Context, agents []*coordinator.AgentState) {
 		for _, a := range agents {
-			s.resolveAgentSessionName(a)
+			s.resolveAgentSessionName(ctx, a)
 			if a.Status != "blocked" {
 				continue
 			}
