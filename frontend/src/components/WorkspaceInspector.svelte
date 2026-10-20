@@ -27,6 +27,10 @@
     preview && 'kind' in preview && preview.kind === 'text'
       && /\.(md|mdx|markdown)$/i.test(preview.path || '')
   ));
+  const isHtmlFile = $derived(Boolean(
+    preview && 'kind' in preview && preview.kind === 'text'
+      && /\.(html|htm)$/i.test(preview.path || '')
+  ));
   const canEditFile = $derived(Boolean(
     agent && preview && 'kind' in preview && preview.kind === 'text'
       && relayStore.workspaceEditAvailable(agent)
@@ -244,7 +248,7 @@
     const current = ++previewGeneration;
     selectedPath = path;
     preview = null;
-    fileMode = /\.(md|mdx|markdown)$/i.test(path) ? 'render' : 'text';
+    fileMode = /\.(md|mdx|markdown|html|htm)$/i.test(path) ? 'render' : 'text';
     editText = '';
     resetDiffZoom();
     error = '';
@@ -303,7 +307,7 @@
     try {
       const saved = await relayStore.saveWorkspaceFile(agent, preview.path, editText);
       preview = { ...preview, text: editText, size: saved.size };
-      fileMode = isMarkdownFile ? 'render' : 'text';
+      fileMode = isMarkdownFile || isHtmlFile ? 'render' : 'text';
       relayStore.showToast(`Saved ${preview.path}`);
     } catch (saveError) {
       relayStore.showToast((saveError as Error).message, true);
@@ -427,15 +431,15 @@
               <strong>{preview.path}</strong>
               <div class="preview-heading-meta">
                 <span>{Math.ceil(preview.size / 1024)} KB</span>
-                {#if isMarkdownFile || canEditFile}
+                {#if isMarkdownFile || isHtmlFile || canEditFile}
                   <div class="preview-mode-toggle" role="group" aria-label="File view mode">
-                    {#if isMarkdownFile}
+                    {#if isMarkdownFile || isHtmlFile}
                       <button type="button" class:active={fileMode === 'render'} onclick={() => { fileMode = 'render'; }} title="Rendered preview">Render</button>
                       <button type="button" class:active={fileMode === 'text'} onclick={() => { fileMode = 'text'; }} title="Raw text">Text</button>
                     {/if}
                     {#if canEditFile}
                       {#if fileMode === 'edit'}
-                        <button type="button" onclick={() => { fileMode = isMarkdownFile ? 'render' : 'text'; }} title="Back to preview">Done</button>
+                        <button type="button" onclick={() => { fileMode = isMarkdownFile || isHtmlFile ? 'render' : 'text'; }} title="Back to preview">Done</button>
                         <button type="button" class="active save" disabled={saving} onclick={saveEdit} title="Save file">{saving ? 'Saving…' : 'Save'}</button>
                       {:else}
                         <button type="button" class:active={false} onclick={startEdit} title="Edit file">Edit</button>
@@ -452,6 +456,16 @@
             </header>
             {#if fileMode === 'edit'}
               <textarea class="workspace-code-preview editing" style={`--preview-zoom: ${previewZoom}`} wrap="soft" spellcheck="false" aria-label={`Editing ${preview.path}`} bind:value={editText}></textarea>
+            {:else if isHtmlFile && fileMode === 'render'}
+              <!-- Fully sandboxed: no scripts, no same-origin, no forms — the
+                   localhost viewer's envelope. Static HTML/CSS renders; the
+                   page's own JS and fetches do not run. -->
+              <iframe
+                class="workspace-html-frame"
+                title={`Rendered preview of ${preview.path}`}
+                sandbox=""
+                srcdoc={preview.text || ''}
+              ></iframe>
             {:else if isMarkdownFile && fileMode === 'render'}
               <div class="workspace-markdown conversation-markdown" style={`--preview-zoom: ${previewZoom}`}>{@html safeMarkdownHtml(preview.text || '')}</div>
             {:else}

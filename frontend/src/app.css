@@ -1455,6 +1455,7 @@ body[data-view='history'] .header-title > span { align-self: flex-start; font-si
 .localhost-empty p { margin: 0 0 .6rem; }
 .localhost-meta { color: var(--muted); display: flex; font-size: .72rem; gap: .6rem; justify-content: space-between; margin-bottom: .35rem; }
 .localhost-frame { background: #fff; border: 1px solid var(--border); border-radius: .5rem; height: 75dvh; width: 100%; }
+.workspace-html-frame { background: #fff; border: 1px solid var(--border); border-radius: .5rem; height: 75dvh; width: 100%; }
 .localhost-text { background: var(--card); border: 1px solid var(--border); border-radius: .5rem; font-size: .78rem; margin: 0; max-height: 75dvh; overflow: auto; padding: .7rem; white-space: pre-wrap; overflow-wrap: break-word; }
 .localhost-section .agent-card { border-style: dashed; }
 .localhost-section .agent-logo { color: var(--muted); }
