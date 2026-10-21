@@ -20,6 +20,7 @@
     "conversation_history",
     "directory_browser",
     "invitation_qr",
+    "localhost_write",
     "pane_size_lease",
     "pane_size_lease_rows",
     "secret_input",

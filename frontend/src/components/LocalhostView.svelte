@@ -4,6 +4,7 @@
   import {
     classifyLocalhostContent,
     localhostFetch,
+    localhostPost,
     localhostPortUp,
     type LocalhostContentKind,
   } from '$lib/localhost';
@@ -123,8 +124,10 @@
 
   // JS dashboards can't fetch() out of a sandboxed srcdoc iframe: the
   // document has an opaque origin and no base URL. The shim gives the page a
-  // fetch() that posts GET requests to the parent, which re-issues them
-  // through local_http_fetch — the relay still enforces loopback-only GET.
+  // fetch() that posts GET + POST requests to the parent, which re-issues
+  // them through local_http_fetch / local_http_request — the relay still
+  // enforces loopback-only + bounded payloads, and reader-role credentials
+  // are denied the POST variant by the action catalog.
   const LOCALHOST_FETCH_SHIM = String.raw`
     (() => {
       let fetchSeq = 0;
@@ -143,13 +146,20 @@
       });
       window.fetch = (input, init) => {
         const method = String((init && init.method) || 'GET').toUpperCase();
-        if (method !== 'GET') return Promise.reject(new TypeError('Localhost viewer allows GET fetches only.'));
+        if (method !== 'GET' && method !== 'POST') return Promise.reject(new TypeError('Localhost viewer allows GET and POST fetches only.'));
         const url = typeof input === 'string' ? input : String((input && input.url) || '');
+        const body = init && init.body != null ? String(init.body) : '';
+        let contentType = '';
+        if (init && init.headers) {
+          const h = init.headers;
+          contentType = typeof h.get === 'function' ? String(h.get('content-type') || '')
+            : String(h['content-type'] || h['Content-Type'] || '');
+        }
         return new Promise((resolve, reject) => {
           const id = ++fetchSeq;
           pending.set(id, { resolve, reject });
           try {
-            parent.postMessage({ __herdrFetch: true, id, url }, '*');
+            parent.postMessage({ __herdrFetch: true, id, url, method, body, contentType }, '*');
           } catch (error) {
             pending.delete(id);
             reject(error);
@@ -174,6 +184,9 @@
     if (!data || data.__herdrFetch !== true) return;
     const id = typeof data.id === 'number' ? data.id : 0;
     const url = typeof data.url === 'string' ? data.url : '';
+    const method = String(data.method || 'GET').toUpperCase();
+    const body = typeof data.body === 'string' ? data.body : '';
+    const contentType = typeof data.contentType === 'string' ? data.contentType : '';
     const reply = (payload: Record<string, unknown>) => source.postMessage({ __herdrFetchReply: true, id, ...payload }, '*');
     const refuse = (message: string) => reply({ error: message });
 
@@ -192,7 +205,12 @@
       return;
     }
     try {
-      const result = await localhostFetch(effectiveRelayId, activePort, path);
+      const result = method === 'POST'
+        ? await localhostPost(effectiveRelayId, activePort, path, body, contentType)
+        : method === 'GET'
+          ? await localhostFetch(effectiveRelayId, activePort, path)
+          : null;
+      if (!result) { refuse('Unsupported fetch method.'); return; }
       reply({ status: result.status, contentType: result.contentType, text: result.text });
     } catch (error) {
       refuse(error instanceof Error ? error.message : 'Localhost fetch failed.');

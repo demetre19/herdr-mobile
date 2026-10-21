@@ -123,6 +123,7 @@ var actionCatalog = map[string]ActionMetadata{
 	"install_update":           mutateAction("install_update", false, false),
 	"lease_pane_size":          mutateAction("lease_pane_size", true, false),
 	"list_directories":         readAction("list_directories"),
+	"local_http_request":       mutateAction("local_http_request", false, false),
 	"local_http_fetch":         readAction("local_http_fetch"),
 	"list_slash_commands":      readAction("list_slash_commands"),
 	"navigate_question":        mutateAction("navigate_question", true, true),
@@ -506,4 +507,5 @@ var Capabilities = []string{
 	"semantic_input",
 	"secret_input",
 	"invitation_qr",
+	"localhost_write",
 }

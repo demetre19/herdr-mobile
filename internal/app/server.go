@@ -981,6 +981,8 @@ func (s *Server) Run(ctx context.Context) error {
 			s.sendCommandResult(client, requestID, "list_directories", true, "completed", "", "", listing)
 		case "local_http_fetch":
 			s.handleLocalhostFetch(client, msg)
+		case "local_http_request":
+			s.handleLocalhostRequest(client, msg)
 		case "list_slash_commands":
 			requestID, _ := msg["request_id"].(string)
 			paneID, _ := msg["pane_id"].(string)

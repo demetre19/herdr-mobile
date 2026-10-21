@@ -113,7 +113,7 @@ func TestLocalhostFetch(t *testing.T) {
 		return "http://127.0.0.1:" + portStr
 	}
 
-	resp, err := localhostFetch(context.Background(), port, "/api/status")
+	resp, err := localhostRequest(context.Background(), http.MethodGet, port, "/api/status", nil, "")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestLocalhostFetchClosedPortBounded(t *testing.T) {
 	}
 
 	start := time.Now()
-	if _, err := localhostFetch(context.Background(), closedPort, "/"); err == nil {
+	if _, err := localhostRequest(context.Background(), http.MethodGet, closedPort, "/", nil, ""); err == nil {
 		t.Fatal("expected failure for closed port")
 	}
 	if elapsed := time.Since(start); elapsed > localhostFetchTimeout+time.Second {

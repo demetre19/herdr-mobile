@@ -59,6 +59,39 @@ export function localhostFetch(
   });
 }
 
+/** Mutating counterpart: POST with a body through local_http_request. */
+export function localhostPost(
+  relayId: string,
+  port: number,
+  path: string,
+  body: string,
+  contentType: string,
+  timeoutMs = 10_000,
+): Promise<LocalhostFetchResult> {
+  const result = relayStore.sendCommand(relayId, {
+    type: 'local_http_request',
+    port,
+    path,
+    method: 'POST',
+    content_type: contentType,
+    body: btoa(unescape(encodeURIComponent(body))),
+  }, timeoutMs);
+  return result.then((command) => {
+    const data = command.data as Record<string, unknown> | undefined;
+    if (!data || typeof data.status !== 'number' || typeof data.body !== 'string') {
+      throw new Error('Relay returned an invalid localhost response.');
+    }
+    const contentTypeHeader = String(data.content_type || '');
+    const bytes = decodeBase64(data.body);
+    return {
+      status: data.status,
+      contentType: contentTypeHeader,
+      text: new TextDecoder('utf-8', { fatal: false }).decode(bytes),
+      truncated: data.truncated === true,
+    };
+  });
+}
+
 /** Quick liveness probe for the port picker; resolves false on any failure. */
 export async function localhostPortUp(relayId: string, port: number): Promise<boolean> {
   try {

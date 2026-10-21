@@ -122,3 +122,107 @@ func TestLocalHTTPFetchRejectsOutOfRangePort(t *testing.T) {
 	if errorText, _ := msg["error"].(string); errorText != "Port must be between 1 and 65535" {
 		t.Errorf("error = %q", errorText)
 	}}
+
+func TestLocalHTTPRequestPosts(t *testing.T) {
+	ln, port := bindLocalhostPort(t)
+	type captured struct {
+		method      string
+		contentType string
+		body        string
+	}
+	got := make(chan captured, 1)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got <- captured{method: r.Method, contentType: r.Header.Get("Content-Type"), body: string(body)}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"saved":true}`))
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Close() }()
+
+	env := setupEnv(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, env.wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	payload := `{"section":"fleet","open":true}`
+	command := map[string]any{
+		"type":         "command",
+		"action":       "local_http_request",
+		"request_id":   "localhost-req-3",
+		"protocol":     3,
+		"port":         port,
+		"path":         "/api/section",
+		"method":       "POST",
+		"content_type": "application/json",
+		"body":         base64.StdEncoding.EncodeToString([]byte(payload)),
+	}
+	data, _ := json.Marshal(command)
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	msg := readJSON(t, conn, ctx, 5*time.Second)
+	if msg["type"] != "command_result" {
+		t.Fatalf("expected command_result, got %v", msg["type"])
+	}
+	if msg["ok"] != true {
+		t.Fatalf("ok = %v, error = %v", msg["ok"], msg["error"])
+	}
+	result, _ := msg["data"].(map[string]any)
+	if result["status"].(float64) != http.StatusOK {
+		t.Errorf("status = %v", result["status"])
+	}
+	decoded, _ := base64.StdEncoding.DecodeString(result["body"].(string))
+	if string(decoded) != `{"saved":true}` {
+		t.Errorf("body = %q", string(decoded))
+	}
+
+	select {
+	case request := <-got:
+		if request.method != http.MethodPost || request.contentType != "application/json" || request.body != payload {
+			t.Errorf("upstream saw %v", request)
+		}
+	default:
+		t.Fatal("upstream saw no request")
+	}
+}
+
+func TestLocalHTTPRequestRejectsNonPost(t *testing.T) {
+	env := setupEnv(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, env.wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	command := map[string]any{
+		"type":       "command",
+		"action":     "local_http_request",
+		"request_id": "localhost-req-4",
+		"protocol":   3,
+		"port":       3000,
+		"path":       "/api/section",
+		"method":     "PUT",
+	}
+	data, _ := json.Marshal(command)
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	msg := readJSON(t, conn, ctx, 5*time.Second)
+	if msg["type"] != "command_result" {
+		t.Fatalf("expected command_result, got %v", msg["type"])
+	}
+	if msg["ok"] != false {
+		t.Fatal("non-POST method must be refused")
+	}
+}

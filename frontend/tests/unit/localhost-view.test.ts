@@ -58,8 +58,11 @@ describe('localhost viewer', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Port 3000, service available' }));
     await waitFor(() => expect(screen.getByTitle('Localhost page from port 3000')).toBeTruthy());
     const frame = screen.getByTitle('Localhost page from port 3000') as HTMLIFrameElement;
-    expect(frame.getAttribute('sandbox')).toBe('');
+    // Scripts run so page fetch() calls reach the relay via the injected
+    // shim; the origin stays opaque (no parent DOM/cookies/storage).
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
     expect(frame.getAttribute('srcdoc')).toContain('<h1>Dev server</h1>');
+    expect(frame.getAttribute('srcdoc')).toContain('__herdrFetch');
     expect(sendCommand).toHaveBeenCalledWith('relay-a', { type: 'local_http_fetch', port: 3000, path: '/' }, 10_000);
   });
 
