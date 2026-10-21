@@ -1448,7 +1448,11 @@ body[data-view='history'] .header-title > span { align-self: flex-start; font-si
 .localhost-port-chip.down .localhost-port-dot { background: var(--border); }
 .localhost-port-chip.active { border-color: var(--primary); background: var(--secondary); }
 .localhost-port-dot { border-radius: 50%; display: inline-block; height: .5rem; width: .5rem; }
-.localhost-refresh { flex: 0 0 auto; }
+.localhost-refresh { flex: 0 0 auto; height: 1.7rem; min-height: 1.7rem; width: 1.7rem; }
+.localhost-refresh svg { display: block; height: .95rem; width: .95rem; }
+.localhost-reload { height: 1.6rem; margin-inline-start: auto; min-height: 1.6rem; width: 1.6rem; }
+.localhost-reload svg { display: block; height: .9rem; width: .9rem; }
+.localhost-meta-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .localhost-status { color: var(--muted); font-size: .85rem; padding: .8rem 0; }
 .localhost-error { color: var(--danger); }
 .localhost-empty { color: var(--muted); font-size: .85rem; padding: 1rem 0; }

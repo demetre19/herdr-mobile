@@ -122,6 +122,10 @@
   }
 
   onDestroy(() => { probeGeneration += 1; });
+  function refreshActive(): void {
+    if (activePort === null || loading) return;
+    void load(activePort, activePath);
+  }
 </script>
 
 <div class="localhost-view">
@@ -180,7 +184,12 @@
       <div class="localhost-status localhost-error" role="alert">{errorMessage}</div>
     {:else if activePort !== null && responseText}
       <div class="localhost-meta">
-        <span>:{activePort}{activePath}</span>
+        <span class="localhost-meta-url">:{activePort}{activePath}</span>
+        <Button class="localhost-reload" variant="ghost" size="icon" aria-label="Reload page" title="Reload page" onclick={refreshActive}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36"></path><path d="M21 3v6h-6"></path>
+          </svg>
+        </Button>
         <span>{responseStatus}{responseTruncated ? ' · truncated' : ''}</span>
       </div>
       {#if responseKind === 'html'}
