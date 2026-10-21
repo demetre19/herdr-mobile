@@ -121,6 +121,93 @@
     }
   }
 
+  // JS dashboards can't fetch() out of a sandboxed srcdoc iframe: the
+  // document has an opaque origin and no base URL. The shim gives the page a
+  // fetch() that posts GET requests to the parent, which re-issues them
+  // through local_http_fetch — the relay still enforces loopback-only GET.
+  const LOCALHOST_FETCH_SHIM = String.raw`
+    (() => {
+      let fetchSeq = 0;
+      const pending = new Map();
+      window.addEventListener('message', (event) => {
+        const d = event.data;
+        if (!d || d.__herdrFetchReply !== true) return;
+        const entry = pending.get(d.id);
+        if (!entry) return;
+        pending.delete(d.id);
+        if (d.error) { entry.reject(new TypeError(d.error)); return; }
+        entry.resolve(new Response(d.text || '', {
+          status: d.status || 0,
+          headers: { 'content-type': d.contentType || '' },
+        }));
+      });
+      window.fetch = (input, init) => {
+        const method = String((init && init.method) || 'GET').toUpperCase();
+        if (method !== 'GET') return Promise.reject(new TypeError('Localhost viewer allows GET fetches only.'));
+        const url = typeof input === 'string' ? input : String((input && input.url) || '');
+        return new Promise((resolve, reject) => {
+          const id = ++fetchSeq;
+          pending.set(id, { resolve, reject });
+          try {
+            parent.postMessage({ __herdrFetch: true, id, url }, '*');
+          } catch (error) {
+            pending.delete(id);
+            reject(error);
+          }
+        });
+      };
+    })();
+  `;
+
+  function injectLocalhostFetchShim(html: string): string {
+    const shim = `<script>${LOCALHOST_FETCH_SHIM}<\/script>`;
+    const headMatch = /<head\b[^>]*>/i.exec(html);
+    if (headMatch) {
+      const at = headMatch.index + headMatch[0].length;
+      return html.slice(0, at) + shim + html.slice(at);
+    }
+    return shim + html;
+  }
+
+  async function handleFrameFetch(event: MessageEvent, source: Window): Promise<void> {
+    const data = event.data as Record<string, unknown> | null;
+    if (!data || data.__herdrFetch !== true) return;
+    const id = typeof data.id === 'number' ? data.id : 0;
+    const url = typeof data.url === 'string' ? data.url : '';
+    const reply = (payload: Record<string, unknown>) => source.postMessage({ __herdrFetchReply: true, id, ...payload }, '*');
+    const refuse = (message: string) => reply({ error: message });
+
+    if (!effectiveRelayId || activePort === null) { refuse('No relay or port selected.'); return; }
+    const base = `http://127.0.0.1:${activePort}${activePath}`;
+    let path: string;
+    try {
+      const parsed = new URL(url, base);
+      if (parsed.host !== `127.0.0.1:${activePort}` && parsed.host !== `localhost:${activePort}`) {
+        refuse(`Refused fetch to ${parsed.host}.`);
+        return;
+      }
+      path = parsed.pathname + parsed.search + parsed.hash;
+    } catch {
+      refuse('Invalid fetch URL.');
+      return;
+    }
+    try {
+      const result = await localhostFetch(effectiveRelayId, activePort, path);
+      reply({ status: result.status, contentType: result.contentType, text: result.text });
+    } catch (error) {
+      refuse(error instanceof Error ? error.message : 'Localhost fetch failed.');
+    }
+  }
+
+  function iframeFetchProxy(node: HTMLIFrameElement) {
+    const listener = (event: MessageEvent) => {
+      if (event.source !== node.contentWindow) return;
+      void handleFrameFetch(event, node.contentWindow as Window);
+    };
+    window.addEventListener('message', listener);
+    return { destroy() { window.removeEventListener('message', listener); } };
+  }
+
   onDestroy(() => { probeGeneration += 1; });
   function refreshActive(): void {
     if (activePort === null || loading) return;
@@ -196,8 +283,9 @@
         <iframe
           class="localhost-frame"
           title="Localhost page from port {activePort}"
-          sandbox=""
-          srcdoc={responseText}
+          sandbox="allow-scripts"
+          use:iframeFetchProxy
+          srcdoc={injectLocalhostFetchShim(responseText)}
         ></iframe>
       {:else if responseKind === 'json'}
         <pre class="localhost-text">{prettyJson(responseText)}</pre>
