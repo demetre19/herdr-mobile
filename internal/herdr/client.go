@@ -300,6 +300,7 @@ type Tab struct {
 	Label       string `json:"label"`
 	Number      int    `json:"number"`
 	Cwd         string `json:"cwd"`
+	AgentStatus string `json:"agent_status"`
 }
 
 type CreateResult struct {

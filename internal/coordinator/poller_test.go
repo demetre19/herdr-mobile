@@ -113,6 +113,22 @@ func TestAgentsFromTopologyPreservesForegroundCwd(t *testing.T) {
 		t.Fatalf("cleared foreground cwd = %#v, want empty", stored)
 	}
 }
+func TestAgentsFromTopologyTrustsTabStatusOverPaneSnapshot(t *testing.T) {
+	state := testState()
+	poller := NewPoller(nil, state, time.Second, testLogger())
+	pane := herdr.Pane{
+		ID: "pane-1", TabID: "tab-1", Agent: "omp", Cwd: "/work/pane",
+		Status: "working",
+	}
+	tab := herdr.Tab{ID: "tab-1", Label: "L25", AgentStatus: "idle"}
+	agents := poller.agentsFromTopology([]herdr.Pane{pane}, []herdr.Tab{tab})
+	if len(agents) != 1 || agents[0].Status != "idle" {
+		t.Fatalf("topology agent = %#v, want tab-authoritative idle status", agents)
+	}
+	if agents[0].TabLabel != "L25" {
+		t.Fatalf("topology tab label = %q, want L25", agents[0].TabLabel)
+	}
+}
 
 func TestPollerEventCommitPublishesRecoveryAfterPausedEnrichment(t *testing.T) {
 	state := testState()

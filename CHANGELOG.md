@@ -5,13 +5,13 @@ project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
+### Fixed
 
-- Agent lanes now show liveness at a glance: a lane active in the last five
-  minutes pulses green around its status dot with a green card border, a
-  working-but-quiet lane reads amber, and done/idle lanes stay neutral.
-  The signal derives from the relay's existing activity timestamps, so
-  stale-working lanes no longer glow green and no extra polling is added.
+- Lane status now trusts Herdr's live tab record (`tab.list`) over the
+  pane snapshot's last-known value: settled lanes were still rendering as
+  running because `agent.list` freezes the status when a session dies
+  quietly. The phone polls every 15s, so corrections land on the next
+  poll with no extra traffic.
 
 ## [1.0.26] - 2026-10-22 (fork: demetre19/herdr-mobile)
 

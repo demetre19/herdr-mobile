@@ -71,13 +71,13 @@
 - Normal mode must bound ALL content rows, including box-decorated prose and
   stale-width tables from existing lanes. Only wide mode may preserve their
 
-## Agent lane liveness
+## Agent lane status
 
-- `agentLiveness` (`frontend/src/lib/agents.ts`) splits working lanes by
-  `last_active_at`: active within `AGENT_QUIET_AFTER_MS` (5 min) reads
-  live, older or missing reads quiet, non-working reads settled.
-- Live lanes pulse green around the status dot and take a green card
-  border; quiet lanes take an amber border; dots never move. Threshold is
-  far above the 15s push cadence so genuine runners never flicker.
-- Liveness rides the 60s `relativeNow` ticker already in AgentList — no
-  new timers, no extra polling, no protocol change.
+- Card tone mirrors Herdr's own status and nothing else: `agentStatusTone`
+  (`frontend/src/lib/agents.ts`) maps working → green pulse + card border,
+  blocked → red, attention → amber, everything else muted. Dots never move.
+- The relay's poller trusts `tab.list` (`agent_status`) over the
+  `agent.list` pane snapshot: the pane keeps its last-known status after a
+  session dies quietly, while the tab record settles. Verified live
+  2026-10-22 (Herdr `api snapshot` showed L25/L28/L32 idle while the phone
+  showed them green — the pane snapshot was stale, the tab was truth).

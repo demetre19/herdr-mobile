@@ -208,6 +208,12 @@ func (p *Poller) agentsFromTopology(panes []herdr.Pane, tabs []herdr.Tab) []*Age
 		if tab, ok := tabByID[pane.TabID]; ok {
 			pane.TabLabel = tab.Label
 			pane.TabNumber = tab.Number
+			// `tab.list` is the live authority on whether a session is
+			// running: `agent.list` can report a pane's last-known status
+			// (e.g. working) after it already settled. Trust the tab.
+			if tab.AgentStatus != "" {
+				pane.Status = tab.AgentStatus
+			}
 		}
 		project := ""
 		if pane.Cwd != "" {
