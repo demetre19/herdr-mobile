@@ -59,7 +59,9 @@
 
 - Keep fixed-height virtual rows: regular view wraps text into physical rows
   before rendering; never restore CSS multiline wrapping or browser anchoring.
-- Wrapping uses grapheme display columns and carries active ANSI styles.
+- Wrapping breaks at word boundaries (after the last space/tab that fits),
+  measured in grapheme display columns; overlong words still split by
+  grapheme, and active ANSI styles carry across continuation rows.
   Mode, interface-size, and width changes must repaint the cached frame.
 - The outer terminal owns horizontal scrolling. Row boxes must not clip text;
   wide view reserves the measured 240-column canvas even for short snapshots.

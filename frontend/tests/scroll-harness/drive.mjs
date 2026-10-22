@@ -69,8 +69,14 @@ await page.waitForTimeout(400);
 const trackStart = await page.evaluate(() => {
   const sc = document.querySelector('.term-content');
   const top = sc.getBoundingClientRect().top;
-  const el = [...document.querySelectorAll('[data-terminal-row]')]
-    .find((r) => r.getBoundingClientRect().bottom > top + 2);
+  const rows = [...document.querySelectorAll('[data-terminal-row]')];
+  // Wrapped runs produce identical-looking rows (e.g. 55 x's); tracking an
+  // ambiguous text finds the wrong node. Track the topmost visible row whose
+  // text is unique in the mounted window instead.
+  const counts = new Map();
+  for (const row of rows) counts.set(row.textContent, (counts.get(row.textContent) || 0) + 1);
+  const el = rows.find((r) => r.getBoundingClientRect().bottom > top + 2
+    && counts.get(r.textContent) === 1);
   return { y: el?.getBoundingClientRect().top ?? null, text: el?.textContent };
 });
 let maxDrift = 0;

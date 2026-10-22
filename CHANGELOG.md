@@ -5,10 +5,21 @@ project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.26] - 2026-10-22 (fork: demetre19/herdr-mobile)
+
+### Changed
+
+- Normal-mode wrapping now breaks at word boundaries (after the last space or
+  tab that fits) instead of splitting mid-word; overlong words still split by
+  grapheme, and tabs keep row-local 8-column stops.
+
 ### Fixed
 
 - Normal mode wraps box-decorated content and stale-width table rows too;
   their previous wrapping exemption allowed sideways panning outside wide mode.
+- Scroll harness tracks a unique visible row when asserting streaming
+  stability — wrapped runs produce identical-looking rows, which made the
+  row lookup resolve to the wrong node and report false drift.
 
 ## [1.0.25] - 2026-10-22 (fork: demetre19/herdr-mobile)
 

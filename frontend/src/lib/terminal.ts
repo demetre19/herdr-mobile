@@ -892,9 +892,11 @@ export function terminalHtml(
     .join('');
 }
 
-// Wrap physical lines into fixed-height rows, never UTF-16 offsets or browser
-// multiline boxes. Carry only the renderer's active SGR attributes, not the
-// growing history of escapes. Normal mode bounds decorated content too.
+// Wrap physical lines at word boundaries into fixed-height rows, never UTF-16
+// offsets or browser multiline boxes. Carry only the renderer's active SGR
+// attributes, not the growing history of escapes. A word longer than the pane
+// still splits by grapheme — an indivisible grapheme or tab may exceed a tiny
+// cap on its own row. Normal mode bounds decorated content too.
 function wrapTerminalLine(line: string, maxColumns: number): string[] {
   if (maxColumns < 1) return [line];
   const plain = stripAnsi(line);
@@ -902,18 +904,23 @@ function wrapTerminalLine(line: string, maxColumns: number): string[] {
   if (hasTerminalBoxCell(line)
     && (isSeparatorOnlyLine(line) || isHorizontalBorderLine(line))) return [TERMINAL_SEPARATOR_TOKEN];
 
-  const active = new Map<number, string>();
+  // Partition the raw line into one segment per visible grapheme so ANSI
+  // inside a combining sequence stays with its cluster, and snapshot the
+  // active SGR state before each grapheme for continuation prefixes.
   const ansi = /\x1b\[[0-9;?]*[ -/]*[@-~]/y;
-  const out: string[] = [];
+  const graphemes = [...terminalGraphemes(plain)];
+  const segRaw: string[] = new Array(graphemes.length);
+  const segWidth: number[] = new Array(graphemes.length);
+  const segPrefix: string[] = new Array(graphemes.length);
+  const active = new Map<number, string>();
   let rawIndex = 0;
-  let row = '';
-  let column = 0;
-  const appendEscapes = () => {
+  const consumeEscapes = (): string => {
+    let out = '';
     ansi.lastIndex = rawIndex;
     let match = ansi.exec(line);
     while (match) {
       const escape = match[0];
-      row += escape;
+      out += escape;
       rawIndex += escape.length;
       if (/^\x1b\[[0-9;]*m$/.test(escape)) {
         const codes = escape.slice(2, -1).split(';').map(Number);
@@ -939,34 +946,58 @@ function wrapTerminalLine(line: string, maxColumns: number): string[] {
       ansi.lastIndex = rawIndex;
       match = ansi.exec(line);
     }
+    return out;
   };
-
-  // Segment the whole visible line so even ANSI inserted inside a combining
-  // sequence cannot turn a cluster into two independently wrapped fragments.
-  for (const grapheme of terminalGraphemes(plain)) {
-    let width = grapheme === '\t' ? 8 - (column % 8) : terminalGraphemeWidth(grapheme);
-    let continued = false;
-    if (column > 0 && column + width > maxColumns) {
-      out.push(row);
-      row = '';
-      continued = true;
-      column = 0;
-      if (grapheme === '\t') width = 8;
-    }
-    appendEscapes();
-    if (continued) row = [...active.values()].map((codes) => `\x1b[${codes}m`).join('') + row;
-    let remaining = grapheme.length;
+  for (let index = 0; index < graphemes.length; index += 1) {
+    const prefix = consumeEscapes();
+    segPrefix[index] = [...active.values()].map((codes) => `\x1b[${codes}m`).join('');
+    let segment = prefix;
+    let remaining = graphemes[index].length;
     while (remaining > 0) {
-      appendEscapes();
+      segment += consumeEscapes();
       const length = (line.codePointAt(rawIndex) || 0) > 0xFFFF ? 2 : 1;
-      row += line.slice(rawIndex, rawIndex + length);
+      segment += line.slice(rawIndex, rawIndex + length);
       rawIndex += length;
       remaining -= length;
     }
-    column += width;
+    segRaw[index] = segment;
+    segWidth[index] = terminalGraphemeWidth(graphemes[index]);
   }
-  appendEscapes();
-  out.push(row);
+  const trailingEscapes = consumeEscapes();
+
+  // Greedy word wrap: fill each row, then break after the last space or tab
+  // instead of mid-word. Tabs keep row-local eight-column stops; a word
+  // fragment moved to a fresh row holds no tabs, so its width stays exact.
+  const rowText = (from: number, to: number) =>
+    (segPrefix[from] ?? '') + segRaw.slice(from, to).join('');
+  const out: string[] = [];
+  let rowStart = 0;
+  let column = 0;
+  let lastBreak = -1;
+  let index = 0;
+  while (index < graphemes.length) {
+    const width = graphemes[index] === '\t' ? 8 - (column % 8) : segWidth[index];
+    if (column > 0 && column + width > maxColumns) {
+      if (lastBreak >= rowStart) {
+        out.push(rowText(rowStart, lastBreak + 1));
+        rowStart = lastBreak + 1;
+        column = 0;
+        for (let moved = rowStart; moved < index; moved += 1) column += segWidth[moved];
+        lastBreak = -1;
+        continue;
+      }
+      out.push(rowText(rowStart, index));
+      rowStart = index;
+      column = 0;
+      lastBreak = -1;
+      continue;
+    }
+    if (graphemes[index] === ' ' || graphemes[index] === '\t') lastBreak = index;
+    column += width;
+    index += 1;
+  }
+  if (rowStart >= graphemes.length) out[out.length - 1] += trailingEscapes;
+  else out.push(rowText(rowStart, graphemes.length) + trailingEscapes);
   return out;
 }
 

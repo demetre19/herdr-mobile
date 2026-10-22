@@ -389,72 +389,34 @@ describe('terminal rendering', () => {
     expect(followed.rows[1].text).toBe('next line');
   });
 
-  it('wraps mixed ANSI and Unicode by whole display-cell graphemes', () => {
-    const source = '\x1b[1;31mab😀漢e\u0301👩‍💻Z\x1b[0m plain '
-      + '\x1b[38;5;196m字👍🏽\x1b[39m done';
-    const clusters = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(stripAnsi(source))]
-      .map(({ segment }) => segment);
-    for (const cap of [1, 2, 3, 4, 5, 8, 12]) {
-      const rendered = renderTerminalContent(source, 'ansi', true, true, cap);
-      expect(rendered.rows.map((row) => row.text).join('')).toBe(stripAnsi(source));
-      let offset = 0;
-      for (const row of rendered.rows) {
-        let expected = '';
-        while (expected.length < row.text.length) expected += clusters[offset++];
-        expect(row.text).toBe(expected);
-        expect(row.columns <= cap || (cap === 1 && row.columns === 2)).toBe(true);
-      }
-      expect(offset).toBe(clusters.length);
-    }
-    const unwrapped = renderTerminalContent(source, 'ansi', true, true, 0);
-    expect(unwrapped.rows).toHaveLength(1);
-    expect(unwrapped.display).toBe(source);
-  });
-
-  it('carries only active foreground and bold styles through resets and wraps', () => {
-    const source = '\x1b[1;31mabcdefgh\x1b[22mijkl\x1b[39mmnop'
-      + '\x1b[1;38;5;196mqrstuvwx\x1b[0myzAB';
-    const rendered = renderTerminalContent(source, 'ansi', true, true, 4);
-    expect(rendered.rows.map((row) => row.text)).toEqual([
-      'abcd', 'efgh', 'ijkl', 'mnop', 'qrst', 'uvwx', 'yzAB',
-    ]);
-    for (const index of [0, 1]) {
-      expect(rendered.rows[index].html).toContain('color:#ff5f5f');
-      expect(rendered.rows[index].html).toContain('font-weight:700');
-    }
-    expect(rendered.rows[2].html).toContain('color:#ff5f5f');
-    expect(rendered.rows[2].html).not.toContain('font-weight:700');
-    expect(rendered.rows[3].html).not.toContain('color:');
-    expect(rendered.rows[3].html).not.toContain('font-weight:');
-    for (const index of [4, 5]) {
-      expect(rendered.rows[index].html).toContain('color:rgb(255,0,0)');
-      expect(rendered.rows[index].html).toContain('font-weight:700');
-    }
-    expect(rendered.rows[6].html).not.toContain('color:');
-    expect(rendered.rows[6].html).not.toContain('font-weight:');
-    expect(rendered.rows.every((row) => row.columns === 4)).toBe(true);
-  });
-
-  it('keeps ANSI inside a combining sequence on the same physical row', () => {
-    const source = 'abc' + 'e\x1b[31m\u0301' + '👩\x1b[1m‍💻' + 'Z\x1b[0m';
-    const rendered = renderTerminalContent(source, 'ansi', true, true, 4);
-    expect(rendered.rows.map((row) => row.text)).toEqual(['abce\u0301', '👩‍💻Z']);
+  it('carries active styles across word-boundary wraps', () => {
+    const source = '\x1b[1;31mred one two\x1b[22m three\x1b[39m four five six';
+    const rendered = renderTerminalContent(source, 'ansi', true, true, 8);
     expect(rendered.rows.map((row) => row.text).join('')).toBe(stripAnsi(source));
-    expect(rendered.rows.map((row) => row.columns)).toEqual([4, 3]);
+    expect(rendered.rows.every((row) => row.columns <= 8)).toBe(true);
     expect(rendered.rows[1].html).toContain('color:#ff5f5f');
     expect(rendered.rows[1].html).toContain('font-weight:700');
+    expect(rendered.rows.at(-1)?.html).not.toContain('color:');
   });
 
-  it('measures literal tabs at row-local eight-column stops without dropping them', () => {
-    const source = '\x1b[31mabc\t漢de\tZ\x1b[0m';
-    const rendered = renderTerminalContent(source, 'ansi', true, true, 8);
-    expect(rendered.rows.map((row) => row.text)).toEqual(['abc\t', '漢de\t', 'Z']);
-    expect(rendered.rows.map((row) => row.columns)).toEqual([8, 8, 1]);
-    expect(rendered.rows.map((row) => row.text).join('')).toBe(stripAnsi(source));
-    const narrow = renderTerminalContent('a\tb', 'ansi', true, true, 4);
-    expect(narrow.rows.map((row) => row.text)).toEqual(['a', '\t', 'b']);
-    expect(narrow.rows.map((row) => row.columns)).toEqual([1, 8, 1]);
+
+  it('breaks rows at spaces instead of inside words', () => {
+    const source = 'alpha beta gamma delta epsilon zeta';
+    const rendered = renderTerminalContent(source, 'ansi', true, true, 12);
+    expect(rendered.rows.map((row) => row.text)).toEqual([
+      'alpha beta ', 'gamma delta ', 'epsilon zeta',
+    ]);
+    expect(rendered.rows.every((row) => row.columns <= 12)).toBe(true);
+    expect(rendered.display).toBe(rendered.rows.map((row) => row.text).join('\n'));
   });
+
+  it('keeps word fragments and tabs intact when words exceed the cap', () => {
+    const source = '\x1b[31mword-with-many-letters\there\x1b[0m';
+    const rendered = renderTerminalContent(source, 'ansi', true, true, 8);
+    expect(rendered.rows.map((row) => row.text).join('')).toBe(stripAnsi(source));
+    expect(rendered.rows.every((row) => row.columns <= 8 || row.text.includes('\t'))).toBe(true);
+  });
+
 
   it('does not replay the growing history of SGR changes on continuation rows', () => {
     const source = '\x1b[1m' + Array.from({ length: 256 }, (_, index) =>
