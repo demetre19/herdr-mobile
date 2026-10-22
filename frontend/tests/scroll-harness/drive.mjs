@@ -60,7 +60,9 @@ check('scrollback retained locally (>300 rows)', g.rowCount > 300, `rows=${g.row
 // --- Test 2: reading mode — tracked row must not move ---------------------
 await page.evaluate(() => {
   const sc = document.querySelector('.term-content');
-  sc.scrollTop = 2500;
+  // Scroll well clear of the 48px bottom magnet without overshooting the
+  // document — a clamped scroll lands at the bottom and keeps the pin.
+  sc.scrollTop = sc.scrollHeight - sc.clientHeight - 300;
   sc.dispatchEvent(new Event('scroll'));
 });
 await page.waitForTimeout(400);
@@ -105,7 +107,9 @@ await page.waitForTimeout(400);
 g = await geo();
 check('pin holds after repin + more output', g.bottom < 2, `bottom=${g.bottom.toFixed(1)}`);
 
-// --- Test 4: fixed rows, long lines clip, horizontal scroll ---------------
+// --- Test 4: fixed rows, long lines wrap at the pane width ----------------
+// Regular view wraps a long line into extra fixed-height rows — no
+// horizontal scroll. Wide-view horizontal pan is covered by wide2.mjs.
 await page.evaluate(() => window.__setFrame(
   ['short', 'x'.repeat(500), 'also short'].join('\n'), 'plain'));
 await page.waitForTimeout(300);
@@ -113,10 +117,13 @@ const fixed = await page.evaluate(() => {
   const rows = [...document.querySelectorAll('.ansi-line')];
   const heights = new Set(rows.map((r) => Math.round(r.getBoundingClientRect().height * 100)));
   const sc = document.querySelector('.term-content');
-  return { heights: [...heights], canScrollX: sc.scrollWidth > sc.clientWidth, scrollW: sc.scrollWidth, clientW: sc.clientWidth };
+  return { heights: [...heights], canScrollX: sc.scrollWidth > sc.clientWidth,
+    scrollW: sc.scrollWidth, clientW: sc.clientWidth,
+    xRows: rows.filter((r) => /^x+$/.test(r.textContent)).length };
 });
 check('all rows exactly one height', fixed.heights.length === 1, `heights=${fixed.heights}`);
-check('long line scrolls horizontally', fixed.canScrollX, `w=${fixed.scrollW}/${fixed.clientW}`);
+check('long line wraps into extra rows', fixed.xRows >= 8, `xRows=${fixed.xRows}`);
+check('wrapped view does not scroll horizontally', !fixed.canScrollX, `w=${fixed.scrollW}/${fixed.clientW}`);
 
 // --- Test 5: scroll-up during stream frees the pin, then re-pin -----------
 // Reseed tall content (the 3-line frame left the view at the top) and pin.

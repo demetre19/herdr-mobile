@@ -1206,7 +1206,7 @@
   {#if doneWorkspaces.length}
     <section class="agent-section done-section" aria-labelledby="section-done">
       <h2 id="section-done" class="section-heading">
-        <span class="status-dot status-success"></span>Done
+        <span class="status-dot"></span>Done
         <span class="section-count" aria-hidden="true">{doneAgents.length}</span>
       </h2>
       {@render workspaceGrid(doneWorkspaces, true, 'done')}
@@ -1216,7 +1216,7 @@
   {#if workingWorkspaces.length}
     <section class="agent-section working-section" aria-labelledby="section-working">
       <h2 id="section-working" class="section-heading">
-        <span class="status-dot status-warning"></span>Working
+        <span class="status-dot status-success"></span>Working
         <span class="section-count" aria-hidden="true">{workingAgents.length}</span>
       </h2>
       {@render workspaceGrid(workingWorkspaces, true, 'working')}

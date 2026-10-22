@@ -5,12 +5,26 @@ const page = await ctx.newPage();
 page.on('console', (m) => { if (m.type() === 'error') console.log('[page]', m.text()); });
 await page.goto('http://127.0.0.1:5199/tests/scroll-harness/');
 await page.waitForFunction(() => !!window.__setFrame && !!document.querySelector('.term-content'));
+// Feed a 240-col snapshot (the wide-view lease target) then toggle wide view
+// through the real button.
 await page.evaluate(() => {
   const lines = Array.from({ length: 200 }, (_, i) =>
     `row ${String(i).padStart(3, '0')} ` + 'data-'.repeat(38).slice(0, 220 - `row ${i} `.length));
   window.__setFrame(lines.join('\n'), 'plain');
 });
-await page.waitForTimeout(500);
+await page.waitForTimeout(600);
+const leaseProbe = await page.evaluate(() => ({
+  leased: window.__leased,
+  styleAttr: document.querySelector('.term-content').getAttribute('style'),
+}));
+// Wide-view button only exists once a lease session is active.
+const wideBtn = await page.waitForSelector('[aria-label="Toggle wide view"]', { timeout: 5000 }).catch(() => null);
+if (wideBtn) {
+  await wideBtn.click();
+  await page.waitForTimeout(300);
+  const leased = await page.evaluate(() => window.__leased);
+  console.log('after wide toggle, leased:', JSON.stringify(leased));
+}
 
 const geo = () => page.evaluate(() => {
   const sc = document.querySelector('.term-content');

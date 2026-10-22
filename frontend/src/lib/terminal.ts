@@ -902,6 +902,34 @@ export function terminalHtml(
     .join('');
 }
 
+// A row wider than the pane wraps at the physical-line level — every
+// continuation becomes its own fixed-height row in the scrollback, which is
+// what keeps scrollTop a pure row index. Wrap is ANSI-safe: escapes are
+// skipped when finding the boundary, and each continuation replays the
+// active SGR prefix so colours survive the break. Box-drawn rows and pure
+// borders still collapse to a separator when they exceed the cap.
+function wrapTerminalLine(line: string, maxColumns: number): string[] {
+  if (maxColumns < 1) return [line];
+  if (hasTerminalBoxCell(line)) {
+    if (isSeparatorOnlyLine(line) || isHorizontalBorderLine(line)) return [TERMINAL_SEPARATOR_TOKEN];
+    return [line];
+  }
+  const columns = terminalTextColumns(stripAnsi(line));
+  if (columns <= maxColumns) return [line];
+  const out: string[] = [];
+  let rest = line;
+  while (terminalTextColumns(stripAnsi(rest)) > maxColumns) {
+    const cut = rawIndexAtVisibleOffset(rest, maxColumns);
+    out.push(rest.slice(0, cut));
+    // Re-apply the SGR codes that were active at the cut so the next row
+    // continues in the same colours; a bare reset would lose them.
+    const prefix = rest.slice(0, cut).match(/(?:\x1b\[[0-9;?]*[ -/]*[@-~])+/g) || [];
+    rest = (prefix.length ? prefix.join('') : '') + rest.slice(cut);
+  }
+  out.push(rest);
+  return out;
+}
+
 // A divider drawn wider than the pane is reflowed by the terminal into a full
 // row plus a short remainder, and a physical-row read faithfully returns both.
 // They are one rule, so collapse the run into a single separator rather than
@@ -943,7 +971,7 @@ export function renderTerminalContent(
     (preserveLayout && !preserveLineEnds
       ? markedDisplay.split('\n').map(trimAnsiLineEnd)
       : markedDisplay.split('\n'))
-      .map((line) => responsiveTerminalGridLine(line, maxFixedGridColumns)),
+      .flatMap((line) => wrapTerminalLine(line, maxFixedGridColumns)),
     maxFixedGridColumns,
   ).join('\n');
   if (format !== 'ansi') {

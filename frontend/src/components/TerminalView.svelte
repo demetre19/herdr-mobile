@@ -176,6 +176,7 @@
   let lastContent = '';
   let lastPreserveLayout = false;
   let lastPreserveLineEnds = false;
+  let lastWrapColumns = 0;
   let jumpVisible = $state(false);
   let arrowsOpen = $state(false);
   let fkeysOpen = $state(false);
@@ -734,17 +735,21 @@
     preserve = true,
     preserveLineEnds = preserve && !resizeSessionActive && !readOnly,
   ) {
+    // Wrap width for regular view = the pane's live fit: the measured
+    // container columns first (tracks interface size + font), the granted
+    // lease as fallback. Wide view passes 0: rows stay full-width and pan.
+    const wrapColumns = wideView ? 0
+      : Math.max(8, (measuredPaneColumns() || lastLeasedColumns || 0) - 1);
     const layoutChanged = preserve !== lastPreserveLayout
-      || preserveLineEnds !== lastPreserveLineEnds;
+      || preserveLineEnds !== lastPreserveLineEnds
+      || wrapColumns !== lastWrapColumns;
     if (next.content === lastContent && next.format === lastFormat && !layoutChanged) return;
     const rendered = renderTerminalContent(
       next.content,
       next.format,
       preserve,
       preserveLineEnds,
-      // No cap: rows never wrap — every row is exactly one line tall and
-      // overflow scrolls horizontally, so scrollTop is a pure row index.
-      0,
+      wrapColumns,
     );
     lastContent = next.content;
     if (rendered.display === displayed && rendered.html === renderedHtml
@@ -757,6 +762,7 @@
     lastFormat = next.format;
     lastPreserveLayout = preserve;
     lastPreserveLineEnds = preserveLineEnds;
+    lastWrapColumns = wrapColumns;
     const trimmed = spliceScrollback(rendered.rows);
     virtualStickToBottom = stick;
     virtualScrollResetPending = Boolean(terminalElement);

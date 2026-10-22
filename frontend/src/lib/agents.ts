@@ -43,8 +43,8 @@ export function agentStatusGroup(agent: Partial<Agent> | null | undefined): 'att
 export function agentStatusTone(agent: Partial<Agent> | null | undefined): 'danger' | 'warning' | 'success' | 'muted' {
   const group = agentStatusGroup(agent);
   if (group === 'blocked') return 'danger';
-  if (group === 'attention' || group === 'working') return 'warning';
-  if (group === 'done') return 'success';
+  if (group === 'attention') return 'warning';
+  if (group === 'working') return 'success';
   return 'muted';
 }
 
