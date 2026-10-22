@@ -66,3 +66,6 @@
 - Verify compact/regular/large with styled ANSI and Unicode, touch-pan to the
   last character, and streaming while unpinned. Plain text overflow alone is
   not sufficient evidence of device correctness.
+- Normal mode must bound ALL content rows, including box-decorated prose and
+  stale-width tables from existing lanes. Only wide mode may preserve their
+  original width. Test `scrollWidth <= clientWidth`, not just plain prose.

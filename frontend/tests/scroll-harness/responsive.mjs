@@ -13,7 +13,7 @@ await page.evaluate(() => {
   const layout = document.createElement('div'); layout.className = 'terminal-layout';
   app.append(layout); layout.append(document.querySelector('.terminal-view'));
 });
-const text = 'prefix section 👩🏽‍💻 中文 e\u0301 headings match the rest of the output '.repeat(4) + 'LAST';
+const text = '│ prefix section 👩🏽‍💻 中文 e\u0301 headings match the rest of the output '.repeat(4) + 'LAST';
 const ansi = '\x1b[1;36m' + text + '\x1b[0m';
 const metrics = () => page.evaluate(() => {
   const sc = document.querySelector('.term-content');
@@ -21,7 +21,7 @@ const metrics = () => page.evaluate(() => {
   const rows = [...document.querySelectorAll('[data-terminal-row]')];
   return { width: sc.clientWidth, scroll: sc.scrollWidth, left: sc.scrollLeft,
     available: sc.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
-    rows: rows.map(row => { const range = document.createRange(); range.selectNodeContents(row); return { text: row.textContent, width: range.getBoundingClientRect().width }; }) };
+    rows: rows.map(row => ({ text: row.textContent, width: row.getBoundingClientRect().width })) };
 });
 const cdp = await context.newCDPSession(page);
 async function pan() {
@@ -42,6 +42,7 @@ for (const size of ['compact', 'regular', 'large']) {
   // Do not send another frame: interface changes must reflow cached output.
   assert.equal(normal.rows.map(row => row.text).join(''), text);
   assert(normal.rows.every(row => row.width <= normal.available + 1), 'normal row clips');
+  assert(normal.scroll <= normal.width + 1, 'normal mode must not pan sideways');
   await page.click('[aria-label="Toggle wide view"]');
   await page.waitForTimeout(400);
   const wide = await metrics();

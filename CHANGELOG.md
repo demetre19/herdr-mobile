@@ -5,6 +5,11 @@ project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Normal mode wraps box-decorated content and stale-width table rows too;
+  their previous wrapping exemption allowed sideways panning outside wide mode.
+
 ## [1.0.25] - 2026-10-22 (fork: demetre19/herdr-mobile)
 
 ### Fixed

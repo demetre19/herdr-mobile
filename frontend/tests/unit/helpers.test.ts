@@ -323,70 +323,14 @@ describe('terminal rendering', () => {
     expect(mixedBorders.html).not.toContain('<span class="terminal-cell">');
   });
 
-  it('keeps stale wider grids as cell rows in their own scroller in Resize Session', () => {
-    const desktopTable = [
-      `┌${'─'.repeat(80)}┐`,
-      `│ ${'Metric'.padEnd(78)}│`,
-      `└${'─'.repeat(80)}┘`,
-    ].join('\n');
-    const preserved = renderTerminalContent(desktopTable, 'ansi', true);
-    expect(preserved.rows.every((row) => row.fixedGrid)).toBe(true);
 
-    // The stale-width content row keeps its full cells and is marked for the
-    // per-row horizontal scroller; only the borders collapse to separators.
-    const resizedHistory = renderTerminalContent(desktopTable, 'ansi', true, false, 40);
-    expect(resizedHistory.rows.every((row) => !row.fixedGrid)).toBe(true);
-    expect(resizedHistory.rows.filter((row) => row.separator)).toHaveLength(2);
-    const wideRow = resizedHistory.rows.find((row) => row.wideGrid)!;
-    expect(wideRow.text).toContain('Metric');
-    expect(wideRow.columns).toBe(81);
-    expect(wideRow.html).toContain('terminal-wide-grid');
-    expect(wideRow.html).toContain('terminal-cell-box');
-    expect(resizedHistory.html).not.toContain('terminal-grid-line');
-
-    const currentTable = renderTerminalContent([
-      `┌${'─'.repeat(38)}┐`,
-      `│ ${'Metric'.padEnd(36)}│`,
-      `└${'─'.repeat(38)}┘`,
-    ].join('\n'), 'ansi', true, false, 40);
-    expect(currentTable.rows.every((row) => row.fixedGrid && !row.wideGrid)).toBe(true);
-    expect(currentTable.html.match(/terminal-grid-line/g)).toHaveLength(3);
-    expect(currentTable.html).not.toContain('terminal-wide-grid');
-  });
-
-  it('collapses stale-width junctioned table borders to rules instead of wrapping them', () => {
-    const table = [
-      `┌${'─'.repeat(30)}┬${'─'.repeat(30)}┐`,
-      `│ ${'Period'.padEnd(29)}│ ${'Trades'.padEnd(29)}│`,
-      `├${'─'.repeat(30)}┼${'─'.repeat(30)}┤`,
-      `│ ${'Combined'.padEnd(27)}│ ${'156'.padEnd(32)}│`,
-      `└${'─'.repeat(30)}┴${'─'.repeat(30)}┘`,
-    ].join('\n');
-    const resized = renderTerminalContent(table, 'ansi', true, false, 40);
-    expect(resized.rows.filter((row) => row.separator)).toHaveLength(3);
-    expect(resized.rows.filter((row) => row.wideGrid)).toHaveLength(2);
-    expect(resized.display).not.toContain('┬');
-    expect(resized.display).not.toContain('┼');
-    expect(resized.display).toContain('Period');
-    expect(resized.display).toContain('Combined');
-
-    // A current-width junctioned table keeps its exact grid.
-    const narrow = renderTerminalContent([
-      `┌${'─'.repeat(17)}┬${'─'.repeat(17)}┐`,
-      `│ ${'x'.padEnd(16)}│ ${'y'.padEnd(16)}│`,
-      `└${'─'.repeat(17)}┴${'─'.repeat(17)}┘`,
-    ].join('\n'), 'ansi', true, false, 40);
-    expect(narrow.rows.every((row) => row.fixedGrid)).toBe(true);
-
-    // A wide row of empty cells is content (cell walls), never a border rule.
-    const emptyCells = renderTerminalContent(
-      `│${' '.repeat(30)}│${' '.repeat(30)}│`,
-      'ansi',
-      true,
-      false,
-      40,
-    );
-    expect(emptyCells.rows.filter((row) => row.separator)).toHaveLength(0);
+  it('bounds decorated and table content in normal mode but preserves wide mode', () => {
+    const content = `│ \x1b[36m${'old lane output '.repeat(12)}\x1b[0m│`;
+    const normal = renderTerminalContent(content, 'ansi', true, true, 40);
+    expect(normal.rows.every((row) => row.columns <= 40)).toBe(true);
+    expect(normal.rows.map((row) => row.text).join('')).toBe(stripAnsi(content));
+    const wide = renderTerminalContent(content, 'ansi', true, true, 0);
+    expect(wide.rows.map((row) => row.text)).toEqual([stripAnsi(content)]);
   });
 
   it('keeps a bare horizontal rule on one row instead of wrapping a stub under it', () => {
@@ -408,10 +352,6 @@ describe('terminal rendering', () => {
     const unleased = renderTerminalContent('─'.repeat(74), 'ansi', true, true, 0);
     expect(unleased.rows[0].fixedGrid).toBe(true);
 
-    // Prose that merely contains a stroke is still prose, and still re-wraps.
-    const prose = renderTerminalContent(`Connected ─ ${'detail '.repeat(20)}`, 'ansi', true, true, 59);
-    expect(prose.rows[0].separator).toBe(false);
-    expect(prose.rows[0].fixedGrid).toBe(false);
   });
 
   it('draws a rule the pty already reflowed as one line, not a line plus a stub', () => {

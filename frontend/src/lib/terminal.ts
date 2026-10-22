@@ -894,15 +894,13 @@ export function terminalHtml(
 
 // Wrap physical lines into fixed-height rows, never UTF-16 offsets or browser
 // multiline boxes. Carry only the renderer's active SGR attributes, not the
-// growing history of escapes. Tables keep their existing per-row scroller.
+// growing history of escapes. Normal mode bounds decorated content too.
 function wrapTerminalLine(line: string, maxColumns: number): string[] {
   if (maxColumns < 1) return [line];
   const plain = stripAnsi(line);
   if (terminalTextColumns(plain) <= maxColumns) return [line];
-  if (hasTerminalBoxCell(line)) {
-    if (isSeparatorOnlyLine(line) || isHorizontalBorderLine(line)) return [TERMINAL_SEPARATOR_TOKEN];
-    return [line];
-  }
+  if (hasTerminalBoxCell(line)
+    && (isSeparatorOnlyLine(line) || isHorizontalBorderLine(line))) return [TERMINAL_SEPARATOR_TOKEN];
 
   const active = new Map<number, string>();
   const ansi = /\x1b\[[0-9;?]*[ -/]*[@-~]/y;
