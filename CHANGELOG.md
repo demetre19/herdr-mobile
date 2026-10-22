@@ -7,6 +7,12 @@ project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Status transitions now reach the phone live: the event cache handles
+  Herdr's dedicated `pane.agent_status_changed` event and treats a
+  status-only `pane.updated` as a topology commit (previously both were
+  dropped, so a working→idle lane stayed green until the next 15s poll —
+  and longer if polls kept failing).
+
 - Lane status now trusts Herdr's live tab record (`tab.list`) over the
   pane snapshot's last-known value: settled lanes were still rendering as
   running because `agent.list` freezes the status when a session dies

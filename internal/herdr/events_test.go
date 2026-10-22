@@ -304,6 +304,55 @@ func TestSessionCacheCoalescesTerminalLocalPaneUpdates(t *testing.T) {
 	}
 }
 
+func TestSessionCacheCommitsStatusOnlyPaneUpdate(t *testing.T) {
+	cache := NewSessionCache(SessionSnapshot{
+		Panes: []SnapshotPane{{
+			ID: "pane-1", TerminalID: "term-1", WorkspaceID: "workspace-1",
+			TabID: "tab-1", Agent: "codex", Status: "working", Revision: 5,
+		}},
+	})
+	changed, err := cache.Apply(Event{
+		Event: "pane.updated",
+		Data:  json.RawMessage(`{"pane":{"pane_id":"pane-1","agent_status":"idle","revision":6}}`),
+	})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("status-only pane update did not trigger a topology commit")
+	}
+	if cache.Snapshot().Panes[0].Status != "idle" {
+		t.Fatalf("cached pane = %+v, want idle status", cache.Snapshot().Panes[0])
+	}
+}
+
+func TestSessionCacheAppliesAgentStatusChangedEvent(t *testing.T) {
+	cache := NewSessionCache(SessionSnapshot{
+		Panes: []SnapshotPane{{
+			ID: "pane-1", TerminalID: "term-1", WorkspaceID: "workspace-1",
+			TabID: "tab-1", Agent: "codex", Status: "working", Revision: 5,
+		}},
+		Tabs: []Tab{{ID: "tab-1", Label: "L25", AgentStatus: "working"}},
+	})
+	changed, err := cache.Apply(Event{
+		Event: "pane.agent_status_changed",
+		Data:  json.RawMessage(`{"pane_id":"pane-1","agent_status":"idle","revision":6}`),
+	})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("agent status event did not trigger a topology commit")
+	}
+	snapshot := cache.Snapshot()
+	if snapshot.Panes[0].Status != "idle" {
+		t.Fatalf("cached pane = %+v, want idle status", snapshot.Panes[0])
+	}
+	if snapshot.Tabs[0].AgentStatus != "idle" {
+		t.Fatalf("cached tab = %+v, want idle status", snapshot.Tabs[0])
+	}
+}
+
 func TestSessionCacheDoesNotPromotePaneMetadataToRunningAgent(t *testing.T) {
 	cache := NewSessionCache(SessionSnapshot{
 		Panes: []SnapshotPane{{

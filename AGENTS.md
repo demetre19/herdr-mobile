@@ -76,6 +76,11 @@
 - Card tone mirrors Herdr's own status and nothing else: `agentStatusTone`
   (`frontend/src/lib/agents.ts`) maps working → green pulse + card border,
   blocked → red, attention → amber, everything else muted. Dots never move.
+- The event stream is the live leg: `SessionCache` (`internal/herdr/events.go`)
+  handles Herdr's dedicated `pane.agent_status_changed` event (alias existed
+  but no case — transitions were silently dropped) and treats a status-only
+  `pane.updated` as a topology commit (the change filter excluded Status, so
+  the commit never fired and the phone kept the stale state to the next poll).
 - The relay's poller trusts `tab.list` (`agent_status`) over the
   `agent.list` pane snapshot: the pane keeps its last-known status after a
   session dies quietly, while the tab record settles. Verified live

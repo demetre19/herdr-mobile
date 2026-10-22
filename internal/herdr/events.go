@@ -675,6 +675,36 @@ func (c *SessionCache) Apply(event Event) (bool, error) {
 		}
 		delete(c.panes, data.PaneID)
 		return data.PaneID != "", nil
+	case "pane.agent_status_changed":
+		var data struct {
+			PaneID string `json:"pane_id"`
+			TabID  string `json:"tab_id"`
+			Status string `json:"agent_status"`
+		}
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			return false, err
+		}
+		if data.PaneID == "" || data.Status == "" {
+			return false, nil
+		}
+		pane, ok := c.panes[data.PaneID]
+		if !ok {
+			return false, nil
+		}
+		if pane.Status == data.Status {
+			return false, nil
+		}
+		pane.Status = data.Status
+		if data.TabID != "" {
+			pane.TabID = data.TabID
+		}
+		c.panes[data.PaneID] = pane
+		tab, ok := c.tabs[pane.TabID]
+		if ok && tab.AgentStatus != data.Status {
+			tab.AgentStatus = data.Status
+			c.tabs[pane.TabID] = tab
+		}
+		return true, nil
 	case "pane.agent_detected":
 		var data struct {
 			PaneID      string  `json:"pane_id"`
@@ -870,8 +900,10 @@ func (c *SessionCache) setPane(snapshot SnapshotPane) bool {
 }
 
 // paneTopologyChanged excludes terminal-local churn from topology commits.
-// Revision, status, scroll position, state sequence, and the pane label can
-// change during ordinary output without changing the agent topology.
+// Revision, scroll position, state sequence, and the pane label can change
+// during ordinary output without changing the agent topology. Status IS
+// topology here: a working→idle transition with no other change must still
+// commit, or the phone keeps the stale running state until the next poll.
 func paneTopologyChanged(previous, current Pane) bool {
 	return previous.ID != current.ID ||
 		previous.TerminalID != current.TerminalID ||
@@ -880,7 +912,8 @@ func paneTopologyChanged(previous, current Pane) bool {
 		previous.Focused != current.Focused ||
 		previous.Cwd != current.Cwd ||
 		previous.ForegroundCwd != current.ForegroundCwd ||
-		previous.Agent != current.Agent
+		previous.Agent != current.Agent ||
+		previous.Status != current.Status
 }
 
 func (c *SessionCache) applyAgent(agent SnapshotAgent) {
