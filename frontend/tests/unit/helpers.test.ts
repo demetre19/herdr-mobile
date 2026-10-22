@@ -38,7 +38,6 @@ import {
   isSeparatorOnlyLine,
   latestCompletedResponse,
   renderTerminalContent,
-  renderedRowShift,
   setTerminalScheme,
   stripAnsi,
   TERMINAL_REPEATED_RUN_LIMIT,
@@ -46,7 +45,6 @@ import {
   terminalHtml,
   trimTrailingDecoration,
 } from '$lib/terminal';
-import { VirtualTerminalIndex } from '$lib/virtual-terminal';
 import type { Agent, QuestionInteraction, RelayConnectionView } from '$lib/types';
 
 function agent(overrides: Partial<Agent>): Agent {
@@ -464,19 +462,6 @@ describe('terminal rendering', () => {
     expect(rendered.html).toContain('font-weight:700');
   });
 
-  it('detects rows cropped from the front of a growing log', () => {
-    const row = (text: string) => ({ html: '', text, columns: text.length, fixedGrid: false, wideGrid: false, separator: false });
-    const rows = (start: number, length: number) =>
-      Array.from({ length }, (_, index) => row(`log line ${start + index}`));
-    expect(renderedRowShift(rows(0, 100), rows(10, 100))).toBe(10);
-    expect(renderedRowShift(rows(0, 100), rows(0, 110))).toBe(0);
-    expect(renderedRowShift(rows(0, 100), rows(500, 100))).toBe(0);
-    const blankHead = [row(''), row('  '), ...rows(40, 60)];
-    expect(renderedRowShift([...rows(0, 20), ...blankHead], blankHead)).toBe(20);
-    expect(renderedRowShift(rows(0, 4), [row(''), row('only one line')])).toBe(0);
-    expect(renderedRowShift([], rows(0, 10))).toBe(0);
-  });
-
 
   it('removes desktop-width decoration after terminal status text', () => {
     const decorated = `\x1b[2m─ Worked for 1m 46s ${'─'.repeat(120)}\x1b[0m`;
@@ -758,35 +743,3 @@ describe('activity, question drafts, and launch names', () => {
   });
 });
 
-describe('virtual terminal row index', () => {
-  it('maps variable row heights to bounded visible ranges', () => {
-    const index = new VirtualTerminalIndex();
-    index.reset([10, 20, 30, 40]);
-
-    expect(index.total).toBe(100);
-    expect(index.offset(2)).toBe(30);
-    expect(index.range(30, 20, 0)).toEqual({
-      start: 2,
-      end: 3,
-      top: 30,
-      bottom: 40,
-      total: 100,
-    });
-  });
-
-  it('updates following offsets without rebuilding the index', () => {
-    const index = new VirtualTerminalIndex();
-    index.reset([10, 20, 30, 40]);
-
-    expect(index.update(1, 45)).toBe(25);
-    expect(index.total).toBe(125);
-    expect(index.offset(2)).toBe(55);
-    expect(index.range(55, 30, 5)).toMatchObject({
-      start: 1,
-      end: 4,
-      top: 10,
-      bottom: 0,
-    });
-    expect(index.update(8, 50)).toBe(0);
-  });
-});

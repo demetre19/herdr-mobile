@@ -55,12 +55,9 @@
   import { relayStore } from '$lib/store';
   import {
     latestCompletedResponse,
-    renderedRowShift,
     stripAnsi,
     TERMINAL_SEPARATOR_TOKEN,
     renderTerminalContent,
-    terminalResizeLayoutEngaged,
-    terminalScreenColumns,
   } from '$lib/terminal';
   import { detectTerminalMenu, terminalTextInputMode } from '$lib/terminal-menu';
   import type { AttachmentBatchController, AttachmentBatchSnapshot, AttachmentRef } from '$lib/attachments';
@@ -71,7 +68,6 @@
     TerminalFrame,
   } from '$lib/types';
   import type { RenderedTerminalRow } from '$lib/terminal';
-  import { VirtualTerminalIndex } from '$lib/virtual-terminal';
   import { mountTerminalWakeLock } from '$lib/wake-lock';
 
   const connections = relayStore.connections;
@@ -90,30 +86,6 @@
     readOnly?: boolean;
   } = $props();
 
-  interface VirtualTerminalAnchor {
-    index: number;
-    offset: number;
-    text: string;
-    /** true when the anchor came from the DOM scan (its element exists); the
-     * indexAt fallback is estimate-only and must never drive a DOM
-     * correction — it can point at a mounted row dozens of rows away. */
-    dom?: boolean;
-    /** Verbatim texts of the anchor row and the rows under it — the
-     * fingerprint. A 5–6 line sequence is effectively unique in a
-     * scrollback, so resolving by content is immune to index drift,
-     * crop shifts, and rowShift false positives (the jump-to-top vector). */
-    block?: string[];
-  }
-
-  const ANCHOR_BLOCK_ROWS = 6;
-
-  function anchorBlock(index: number): string[] {
-    const block: string[] = [];
-    for (let cursor = index; cursor < Math.min(renderedRows.length, index + ANCHOR_BLOCK_ROWS); cursor += 1) {
-      block.push(renderedRows[cursor].text.trim());
-    }
-    return block;
-  }
 
 
   interface QueuedKeyCommand {
@@ -180,52 +152,31 @@
   let virtualContentColumns = $state(0);
   let virtualStart = 0;
   let virtualEnd = 0;
-  let virtualLayoutSignature = '';
+  // Fixed-grid scrollback: every row is exactly rowHeightPx tall and occupies
+  // a permanent slot — scrollbackBase + localIndex is a global coordinate
+  // that never renumbers while the row is retained. Scroll position is a row
+  // index × height, so new frames only update row content and grow the
+  // bottom spacer: neither can displace what the reader is looking at.
+  let scrollbackBase = 0;
+  let rowHeightPx = 17.4;
+  // Client-side cap; rows the relay cropped stay readable well past the
+  // relay's own truncation boundary.
+  const LOCAL_SCROLLBACK_MAX = 5_000;
   let virtualStickToBottom = true;
   let virtualScrollResetPending = false;
-  let pendingResizeAnchor: VirtualTerminalAnchor | null = null;
-  let pendingResizeStick: boolean | null = null;
-  let pendingLayoutStick: boolean | null = null;
   let virtualScrollTop = 0;
   let virtualScrollHeight = 0;
   let virtualClientHeight = 0;
-  let virtualWindowFrame = 0;
-  let virtualRowObserver: ResizeObserver | undefined;
-  let virtualHeightCache = new Map<string, number>();
-  // Heights measured per row index. Unlike the html-keyed cache these survive
-  // content churn at an index whose height did not change, so a repaint does
-  // not fall back to estimates that re-anchor the viewport off by rows.
-  let measuredRowSizes = new Map<number, number>();
-  // A programmatic scrollTop write that overshot the content clamps at the
-  // bottom; the resulting scroll event must not re-arm stick-to-bottom.
-  let suppressBottomPinOnce = false;
   // Finger drags emit a scroll event per sub-pixel step, and classifying each
   // event alone (scrollTop < virtualScrollTop - 1) needs a >1px drop inside
   // ONE event — a slow drag never dropped the pin and the atBottom branch
   // slammed the view back every step. Accumulate upward travel across
   // events; a downward move resets the counter.
   let scrollUpAccum = 0;
-  // Any scroll while a resize settle waits means the anchor captured at wait
-  // start is stale: the apply that ends the wait must re-anchor live.
-  let pendingAnchorStale = false;
-  // A finger dragging the log freezes the viewport: while it is down, DOM
-  // churn is compensated by a translateY on .term-screen — compositor-level,
-  // synchronous, no scroll events, unclampable — instead of scrollTop writes
-  // that can paint a wrong position for a frame before the correction lands
-  // (the visible "jumps then snaps back"). The accumulated offset folds back
-  // into scrollTop on release. Viewport-top positions therefore use
-  // docScrollTop() = scrollTop - heldOffset while held.
-  let touchHeld = false;
-  let heldOffset = 0;
-  let termScreenElement = $state<HTMLElement>(null!);
-  const virtualIndex = new VirtualTerminalIndex();
-  const wideGridOffsets = new Map<number, number>();
-  let wideGridOffsetsPane = '';
   let lastFormat = '';
   let lastContent = '';
   let lastPreserveLayout = false;
   let lastPreserveLineEnds = false;
-  let lastRenderColumnCap = 0;
   let jumpVisible = $state(false);
   let arrowsOpen = $state(false);
   let fkeysOpen = $state(false);
@@ -303,7 +254,6 @@
   const cachedPaneLease = cachedPaneSize();
   let lastLeasedColumns = $state(cachedPaneLease.columns);
   let lastLeasedRows = cachedPaneLease.rows;
-  let renderedResizeColumns = $state(0);
   let measuredCellWidth = $state(0);
   let queuedLease: { columns: number; rows: number; force: boolean } | null = null;
   // Set when the page goes hidden; renewals continue within the grace so a
@@ -337,21 +287,9 @@
   const resizeSessionActive = $derived(
     Boolean(!readOnly && $connections.get(agent.relay_id)?.capabilities.includes('pane_size_lease')),
   );
-  // The capability only says the relay can lease; it does not mean this pane
-  // has a width yet. The wrapping layout is engaged solely when it does.
-  const resizeLayoutActive = $derived(terminalResizeLayoutEngaged(
-    resizeSessionActive,
-    measuredCellWidth,
-    lastLeasedColumns || renderedResizeColumns,
-  ));
-  // Three regimes, not two. A relay that cannot lease at all serves a pane at
-  // its own width, and the fixed layout keeps that pane's columns aligned and
-  // scrolling sideways. A relay that can lease but has not granted a width yet
-  // is showing a pane whose width is nobody's: alignment is already lost, so
-  // those rows wrap at the container instead of stranding the reader on line
-  // tails after every refresh. Readers use the same wrapping regime because
-  // their role can never obtain a size lease.
-  const resizeLayoutPending = $derived(readOnly || (resizeSessionActive && !resizeLayoutActive));
+  // There is no wrapping regime anymore: every row renders at exactly one
+  // line height and overflow scrolls horizontally, which is what makes the
+  // scroll position a pure row index — see scrollbackBase below.
   const options = $derived(approvalOptions(agent));
   const nextBlocked = $derived(sortedAgents(allAgents.filter((item) => agentNeedsResponse(item) && item.pane_id !== agent.pane_id))[0]);
   const slashQuery = $derived(composer.startsWith('/') && !/\s/.test(composer) ? composer.slice(1).toLocaleLowerCase() : null);
@@ -414,19 +352,15 @@
   const terminalContentStyle = $derived.by(() => {
     // Every width is emitted in px of the measured probe cell, never in ch:
     // Safari's Core Text port resolves 1ch against different font metrics
-    // than the rendered glyph advance, so an Nch cap wraps short of N cells.
-    // Before the probe is measured no cap is emitted at all. The wrapping
-    // layout is gated on the same predicate, so the missing cap can no longer
-    // fall back to the container width and shred rows mid-word: the fixed
-    // layout applies instead until a real cap exists.
-    if (measuredCellWidth <= 0) return undefined;
-    const capColumns = lastLeasedColumns || renderedResizeColumns;
-    const styles = [`--terminal-cell-width: ${measuredCellWidth.toFixed(4)}px`];
-    if (resizeLayoutActive) {
-      styles.push(`--terminal-width: ${(capColumns * measuredCellWidth).toFixed(4)}px`);
-    }
-    if (virtualContentColumns > 0) {
-      styles.push(`--terminal-content-width: ${(virtualContentColumns * measuredCellWidth).toFixed(4)}px`);
+    // than the rendered glyph advance. The row height is emitted in px for
+    // the same reason — scrollTop math is rowHeightPx × index, so the CSS
+    // must render that exact height, not an independently-rounded em.
+    const styles = [`--terminal-row-h: ${rowHeightPx}px`];
+    if (measuredCellWidth > 0) {
+      styles.push(`--terminal-cell-width: ${measuredCellWidth.toFixed(4)}px`);
+      if (virtualContentColumns > 0) {
+        styles.push(`--terminal-content-width: ${(virtualContentColumns * measuredCellWidth).toFixed(4)}px`);
+      }
     }
     return styles.join(';');
   });
@@ -506,11 +440,6 @@
     const next = frame;
     const matchingFrame = next?.paneId === agent.pane_id ? next : undefined;
     const preserve = true;
-    // Keyed to the session, not to resizeLayoutActive, on purpose: a relay that
-    // can lease will repaint this pane at the phone's width, so trailing padding
-    // measured at the desktop width is stale whether or not the width has landed
-    // yet. A reader cannot lease at all, so its rows wrap at the phone instead
-    // of trailing off the side of a desktop-width grid.
     const preserveLineEnds = !resizeSessionActive && !readOnly;
     // A frame read while the agent repaints at a new width is transient. Keep
     // the phone's last stable frame painted until the new stable frame lands,
@@ -529,28 +458,15 @@
         ? matchingFrame
         : undefined;
     if (waitingForResizedFrame) {
-      untrack(() => {
-        if (pendingResizeStick !== null) return;
-        pendingResizeStick = virtualStickToBottom;
-        pendingAnchorStale = false;
-        pendingResizeAnchor = virtualStickToBottom
-          ? null
-          : currentVirtualAnchor(touchHeld ? docScrollTop() : (terminalElement?.scrollTop || 0));
-      });
       if (cachedFrame) {
         historyTruncated = Boolean(cachedFrame.truncated);
-        untrack(() => { void applyFrame(cachedFrame, preserve, preserveLineEnds, false) });
+        untrack(() => { void applyFrame(cachedFrame, preserve, preserveLineEnds) });
         return;
       }
       if (renderedRows.length) return;
     }
     if (!matchingFrame || waitingForResizedFrame) {
       untrack(() => {
-        if (!waitingForResizedFrame) {
-          pendingResizeStick = null;
-          pendingResizeAnchor = null;
-          pendingAnchorStale = false;
-        }
         // Once anything has painted, a transient gap never blanks the pane:
         // background tab spawns and lease renegotiations swap the frame out
         // for a beat, and replacing real output with a placeholder is what
@@ -561,14 +477,14 @@
         displayed = rendered.display;
         renderedHtml = rendered.html;
         renderedRows = rendered.rows;
-        resetVirtualRows(Number.POSITIVE_INFINITY);
+        scrollbackBase = 0;
+        renderWindowAt(Number.POSITIVE_INFINITY, true);
         lastFormat = '';
         lastContent = '';
         jumpVisible = false;
       });
       return;
     }
-    if (resizeSessionActive && lastLeasedColumns > 0) renderedResizeColumns = lastLeasedColumns;
     historyTruncated = Boolean(matchingFrame.truncated);
     untrack(() => { void applyFrame(matchingFrame, preserve, preserveLineEnds) });
   });
@@ -622,54 +538,35 @@
     paneSizeLeaseError = '';
     void tick().then(() => requestPaneSizeLease(false));
   });
-  $effect.pre(() => {
-    const interfaceSizeValue = $interfaceSize;
-    void interfaceSizeValue;
-    if (!terminalElement) return;
-    // Stickiness is intent, not geometry. A content collapse clamps scrollTop
-    // onto a position that only LOOKS like the bottom — re-deriving the flag
-    // here re-armed the pin and the next frame slammed the view back to the
-    // end. handleScroll owns the flag; this only snapshots it for the layout
-    // change in flight.
-    pendingLayoutStick = virtualStickToBottom;
-  });
-
   function rememberVirtualScrollGeometry(element: HTMLElement) {
     virtualScrollTop = element.scrollTop;
     virtualScrollHeight = element.scrollHeight;
     virtualClientHeight = element.clientHeight;
   }
 
+  // Re-measure the row height (it follows font/interface size), rebuild the
+  // mounted window, and restore intent: pinned → bottom, reading → same
+  // global row. Exact arithmetic, no measurement or anchoring.
   function resetVirtualScroll(element: HTMLElement, stick: boolean) {
     virtualScrollResetPending = true;
-    virtualLayoutSignature = '';
-    const entryTop = touchHeld ? docScrollTop() : element.scrollTop;
-    const holdAnchor = touchHeld ? currentVirtualAnchor(entryTop) : null;
-    // Under a held touch the window must render around the live position, not
-    // around the stick target — a bottom-window render leaves the viewport
-    // staring at spacer for the whole gesture.
-    const nextTop = resetVirtualRows(
-      touchHeld || !stick ? entryTop : Number.POSITIVE_INFINITY,
-    );
+    const topRow = Math.max(0, Math.round((element.scrollTop - rowOrigin()) / rowHeightPx));
+    measureRowHeight();
+    renderWindowAt(stick ? Number.POSITIVE_INFINITY : rowOrigin() + topRow * rowHeightPx, true);
     void tick().then(() => {
       const stillStuck = virtualStickToBottom;
-      if (touchHeld) {
-        // The finger owns the visible row: correct by the anchor element's
-        // real displacement, not the estimate that paints the wrong spot.
-        applyHeldAnchor(element, holdAnchor, nextTop - entryTop);
-        rememberVirtualScrollGeometry(element);
-        virtualScrollResetPending = false;
-        return;
-      }
-      element.scrollTop = stillStuck ? element.scrollHeight : nextTop;
-      if (!stillStuck
-          && element.scrollHeight - element.scrollTop - element.clientHeight < 1) {
-        suppressBottomPinOnce = true;
-      }
+      element.scrollTop = stillStuck
+        ? element.scrollHeight
+        : rowOrigin() + topRow * rowHeightPx;
       rememberVirtualScrollGeometry(element);
       if (stillStuck) virtualStickToBottom = true;
       virtualScrollResetPending = false;
     });
+  }
+
+  function measureRowHeight() {
+    if (!terminalElement) return;
+    const parsed = Number.parseFloat(getComputedStyle(terminalElement).lineHeight || '');
+    if (Number.isFinite(parsed) && parsed > 0) rowHeightPx = parsed;
   }
 
 
@@ -697,7 +594,7 @@
       } else if (heightChanged && virtualStickToBottom) {
         jumpToBottom();
       } else {
-        scheduleVirtualWindow();
+        renderWindowAt(element.scrollTop);
       }
       previousWidth = nextWidth;
       previousHeight = nextHeight;
@@ -832,8 +729,6 @@
       for (const command of keyQueue.splice(0)) command.resolve(false);
       relayStore.unwatchPane(agent);
       releasePaneSizeLease(false);
-      virtualRowObserver?.disconnect();
-      if (virtualWindowFrame) cancelAnimationFrame(virtualWindowFrame);
       stopWakeLock();
     };
   });
@@ -842,88 +737,38 @@
     next: TerminalFrame,
     preserve = true,
     preserveLineEnds = preserve && !resizeSessionActive && !readOnly,
-    // Cached-frame replays during a resize wait must not consume the pending
-    // stick/anchor snapshot: it belongs to the apply that ends the wait.
-    consumePending = true,
   ) {
-    const renderColumnCap = resizeLayoutActive
-      ? lastLeasedColumns
-      : (resizeLayoutPending ? measuredPaneColumns() || 0 : 0);
     const layoutChanged = preserve !== lastPreserveLayout
-      || preserveLineEnds !== lastPreserveLineEnds
-      || renderColumnCap !== lastRenderColumnCap;
+      || preserveLineEnds !== lastPreserveLineEnds;
     if (next.content === lastContent && next.format === lastFormat && !layoutChanged) return;
     const rendered = renderTerminalContent(
       next.content,
       next.format,
       preserve,
       preserveLineEnds,
-      // Cap box-drawing rows at the width in force. A fixed-grid row is a run
-      // of fixed-width cells with no wrap opportunity between them, so past
-      // the cap it must render as plain text that can wrap instead. Zero means
-      // "no cap", which only a relay that cannot lease is entitled to.
-      renderColumnCap,
+      // No cap: rows never wrap — every row is exactly one line tall and
+      // overflow scrolls horizontally, so scrollTop is a pure row index.
+      0,
     );
     lastContent = next.content;
     if (rendered.display === displayed && rendered.html === renderedHtml
       && next.format === lastFormat && !layoutChanged) return;
-    // Trust the flag, not the position: re-deriving "at bottom" from a 48px
-    // check resurrects pinning when row re-measurement or content growth makes
-    // the browser clamp scrollTop onto a position that merely LOOKS near the
-    // bottom — the user's scrolled-up intent must win (jump-to-bottom bug).
-    const frameStick = virtualStickToBottom;
-    // Pending values capture scroll intent when a resize session opens and are
-    // consumed only by the apply that ends the wait — a cached-frame replay
-    // must not consume them, or the snapshot taken before the user scrolled
-    // keeps overriding the live position on every repaint (the slam vector).
-    const stick = consumePending && resizeSessionActive && pendingResizeStick !== null
-      ? pendingResizeStick
-      : consumePending && layoutChanged && pendingLayoutStick !== null
-        ? pendingLayoutStick
-        : frameStick;
-    const previousTop = touchHeld ? docScrollTop() : (terminalElement?.scrollTop || 0);
-    let previousAnchor = stick
-      ? null
-      : consumePending && pendingResizeAnchor && !pendingAnchorStale
-        ? pendingResizeAnchor
-        : currentVirtualAnchor(previousTop);
-    // Rows cropped from the front shift every index; keep the anchor on the
-    // same row.
-    const rowShift = renderedRowShift(renderedRows, rendered.rows);
-    if (rowShift) wideGridOffsets.clear();
-    if (rowShift) {
-      // Index-keyed heights move with their rows; entries cropped from the
-      // front are dropped and the survivors re-indexed.
-      const shifted = new Map<number, number>();
-      for (const [index, size] of measuredRowSizes) {
-        if (index >= rowShift) shifted.set(index - rowShift, size);
-      }
-      measuredRowSizes = shifted;
-    }
-    if (previousAnchor && rowShift) {
-      previousAnchor = { ...previousAnchor, index: Math.max(0, previousAnchor.index - rowShift) };
-    }
-    if (consumePending) {
-      pendingResizeStick = null;
-      pendingResizeAnchor = null;
-      pendingAnchorStale = false;
-      if (layoutChanged) pendingLayoutStick = null;
-    }
-    virtualStickToBottom = stick;
-    virtualScrollResetPending = Boolean(terminalElement);
+    // Trust the flag, not the position — a content collapse can clamp
+    // scrollTop onto a spot that merely LOOKS like the bottom.
+    const stick = virtualStickToBottom;
     displayed = rendered.display;
     renderedHtml = rendered.html;
-    renderedRows = rendered.rows;
     lastFormat = next.format;
     lastPreserveLayout = preserve;
     lastPreserveLineEnds = preserveLineEnds;
-    lastRenderColumnCap = renderColumnCap;
-    // Under a held touch the window renders around the live position even
-    // when pinned: mounting the tail window while the finger holds the
-    // viewport mid-list leaves the screen on bare spacer until release.
-    const nextTop = resetVirtualRows(
-      stick && !touchHeld ? Number.POSITIVE_INFINITY : previousTop,
-      previousAnchor,
+    const trimmed = spliceScrollback(rendered.rows);
+    virtualStickToBottom = stick;
+    virtualScrollResetPending = Boolean(terminalElement);
+    virtualContentColumns = renderedRows.reduce((max, row) => Math.max(max, row.columns), 0);
+    renderWindowAt(
+      stick ? Number.POSITIVE_INFINITY
+        : Math.max(0, (terminalElement?.scrollTop || 0) - trimmed * rowHeightPx),
+      true,
     );
     await tick();
     if (!terminalElement) {
@@ -931,467 +776,106 @@
       return;
     }
     if (layoutChanged) terminalElement.scrollLeft = 0;
-    if (touchHeld) {
-      // The finger owns the visible row — window around the doc-space
-      // position, then fold the measured displacement into the transform.
-      renderVirtualWindow(docScrollTop());
-      applyHeldAnchor(terminalElement, previousAnchor, nextTop - previousTop);
-    } else if (stick) {
+    if (stick) {
       terminalElement.scrollTop = terminalElement.scrollHeight;
       jumpVisible = false;
       virtualStickToBottom = true;
+    } else if (trimmed) {
+      // Local scrollback trim removed rows above the viewport: keep the same
+      // global row under it by subtracting exactly what was removed.
+      terminalElement.scrollTop = Math.max(
+        0,
+        terminalElement.scrollTop - trimmed * rowHeightPx,
+      );
+      jumpVisible = true;
     } else {
-      terminalElement.scrollTop = nextTop;
-      // A corrected position past the new bottom clamps to it; the scroll
-      // event that fires then reads atBottom and would resurrect the pin,
-      // dragging the reader to the end on the next frame.
-      if (terminalElement.scrollHeight - terminalElement.scrollTop
-          - terminalElement.clientHeight < 1) {
-        suppressBottomPinOnce = true;
-      }
+      // Reading: scrollTop is NOT written. Row slots are permanent — the
+      // splice only updates tail-row content and grows the bottom spacer,
+      // and the window mount swaps same-height spacers for same-height rows,
+      // so nothing above or under the viewport can move.
       jumpVisible = true;
     }
     rememberVirtualScrollGeometry(terminalElement);
     virtualScrollResetPending = false;
-    observeVirtualRows();
   }
 
-  // The scroll offset in CONTENT coordinates. While a finger is held, part of
-  // the displacement lives in the .term-screen transform (heldOffset), so the
-  // viewport's position inside the document is scrollTop - heldOffset.
-  function docScrollTop(): number {
-    return (terminalElement?.scrollTop || 0) - heldOffset;
-  }
-
-  function setHeldOffset(offset: number) {
-    heldOffset = offset;
-    if (termScreenElement) {
-      termScreenElement.style.transform = offset ? `translateY(${offset}px)` : '';
+  // Splice a snapshot into the retained scrollback. The largest suffix-prefix
+  // overlap keeps every row before the splice at its permanent global index
+  // (scrollbackBase + localIndex); rows the relay cropped live on client-side
+  // up to LOCAL_SCROLLBACK_MAX. A miss — wholesale redraw, a resize reflow —
+  // replaces outright: one reposition, never the oscillation that plagued
+  // estimate-based anchoring.
+  function spliceScrollback(next: RenderedTerminalRow[]): number {
+    const prev = renderedRows;
+    if (!next.length) {
+      renderedRows = next;
+      return 0;
     }
-  }
-
-  // Fold the transform back into scrollTop — same visual position — then let
-  // normal scroll bookkeeping re-derive the pin from real geometry.
-  function releaseHeldScroll() {
-    if (!terminalElement) {
-      heldOffset = 0;
-      if (termScreenElement) termScreenElement.style.transform = '';
-      return;
+    if (!prev.length) {
+      scrollbackBase = 0;
+      renderedRows = next;
+      return 0;
     }
-    if (heldOffset) {
-      const docTop = docScrollTop();
-      // Sync the remembered position first so the write's scroll event sees
-      // delta 0 — it is a coordinate conversion, not reader movement.
-      virtualScrollTop = docTop;
-      setHeldOffset(0);
-      terminalElement.scrollTop = docTop;
-      rememberVirtualScrollGeometry(terminalElement);
-    } else if (termScreenElement?.style.transform) {
-      termScreenElement.style.transform = '';
-    }
-  }
-
-  // Under a held touch NOTHING may write scrollTop: any write races the paint
-  // and shows up as a jump. DOM churn shifts content at constant scrollTop,
-  // so freeze it with the transform instead — correcting the anchor row's
-  // measured displacement via heldOffset is synchronous, compositor-cheap,
-  // and never fires a scroll event.
-  function applyHeldAnchor(
-    element: HTMLElement,
-    anchor: VirtualTerminalAnchor | null,
-    estimateDelta: number,
-  ) {
-    if (anchor) {
-      // Resolve by content fingerprint first: after a render the anchor's
-      // captured index may sit in the OLD index space, so it must never
-      // drive the lookup directly. The dom flag only gates whether a DOM
-      // correction may run at all — the indexAt estimate never reaches in.
-      const resolved = matchingAnchorBlock(anchor);
-      const index = resolved ?? (anchor.dom ? anchor.index : -1);
-      const row = index >= 0
-        ? element.querySelector<HTMLElement>(`[data-terminal-row="${index}"]`)
-        : null;
-      if (row) {
-        const desired = element.getBoundingClientRect().top - Math.max(0, anchor.offset);
-        setHeldOffset(heldOffset + row.getBoundingClientRect().top - desired);
-        return;
+    let splice = -1;
+    for (let k = Math.min(prev.length, next.length); k >= 1 && splice < 0; k--) {
+      const anchor = prev.length - k;
+      if (prev[anchor].text !== next[0].text) continue;
+      let matched = true;
+      for (let j = 0; j < Math.min(k, 12); j += 1) {
+        if (prev[anchor + j].text !== next[j].text) { matched = false; break; }
       }
+      if (matched) splice = anchor;
     }
-    if (Math.abs(estimateDelta) < 0.5) return;
-    setHeldOffset(heldOffset - estimateDelta);
+    renderedRows = splice < 0 ? next : prev.slice(0, splice).concat(next);
+    if (renderedRows.length > LOCAL_SCROLLBACK_MAX) {
+      const removed = renderedRows.length - LOCAL_SCROLLBACK_MAX;
+      scrollbackBase += removed;
+      renderedRows = renderedRows.slice(removed);
+      return removed;
+    }
+    return 0;
   }
 
-  function terminalScreenOffset(): number {
+  // Pixel offset of global row 0 inside the scroll container — the
+  // .term-screen offset, i.e. padding plus anything above the rows.
+  function rowOrigin(): number {
     return terminalElement?.querySelector<HTMLElement>('.term-screen')?.offsetTop || 0;
   }
 
-  function currentVirtualAnchor(scrollTop: number): VirtualTerminalAnchor | null {
-    if (!Number.isFinite(scrollTop) || !virtualIndex.length) return null;
-    if (terminalElement) {
-      const viewport = terminalElement.getBoundingClientRect();
-      const element = [...terminalElement.querySelectorAll<HTMLElement>('[data-terminal-row]')]
-        .find((row) => {
-          const bounds = row.getBoundingClientRect();
-          return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
-        });
-      const index = Number.parseInt(element?.dataset.terminalRow || '', 10);
-      if (element && Number.isInteger(index)) {
-        return {
-          index,
-          offset: Math.max(0, viewport.top - element.getBoundingClientRect().top),
-          text: renderedRows[index]?.text || '',
-          dom: true,
-          block: anchorBlock(index),
-        };
-      }
-    }
-    const contentTop = terminalScreenOffset();
-    const index = virtualIndex.indexAt(Math.max(0, scrollTop - contentTop));
-    return {
-      index,
-      offset: Math.max(0, scrollTop - contentTop - virtualIndex.offset(index)),
-      text: renderedRows[index]?.text || '',
-      block: anchorBlock(index),
-    };
-  }
-
-  // Resolve the anchor by CONTENT, not index: a run of five or six verbatim
-  // row texts is a near-unique fingerprint in a scrollback, so a crop, a
-  // rowShift false positive, or any index-space rewrite cannot re-anchor on
-  // a look-alike row — the mechanism that kept snapping the view to the
-  // very top when a new frame arrived mid-read.
-  function matchingAnchorBlock(anchor: VirtualTerminalAnchor): number | null {
-    const block = anchor.block;
-    if (!block?.length || !renderedRows.length) return null;
-    const needed = Math.max(2, Math.ceil(block.length * 0.6));
-    const scoreAt = (start: number): number => {
-      let score = 0;
-      for (let cursor = 0; cursor < block.length; cursor += 1) {
-        const row = renderedRows[start + cursor];
-        if (!row || row.text.trim() !== block[cursor]) break;
-        score += 1;
-      }
-      return score;
-    };
-    // The anchor index rarely moves between frames — try it first.
-    if (anchor.index >= 0 && scoreAt(anchor.index) >= needed) return anchor.index;
-    // Otherwise scan the whole render: the block is unique enough that a
-    // full scan is safe, and only a whole scan survives a large crop.
-    let bestIndex = -1;
-    let bestScore = 0;
-    for (let index = 0; index < renderedRows.length; index += 1) {
-      const score = scoreAt(index);
-      if (score > bestScore) {
-        bestScore = score;
-        bestIndex = index;
-        if (score === block.length) break;
-      }
-    }
-    return bestScore >= needed ? bestIndex : null;
-  }
-
-  // null = no trustworthy match: the caller holds the current scrollTop rather
-  // than snapping to the anchor's stale index (that snap is what threw the
-  // viewport to the top when the anchor row was a blank or a redrawn line).
-  // The anchor's own index is tried first because a frame rarely moves the
-  // row under the viewport; when it moved, only a bounded neighborhood is
-  // searched — TUIs repeat separator and status rows verbatim, and a
-  // whole-list scan happily re-anchors on a look-alike hundreds of rows away,
-  // which is the random-jump vector.
-  function matchingAnchorIndex(anchor: VirtualTerminalAnchor): number | null {
-    const target = anchor.text.trim();
-    if (target.length < 4) return null;
-    const scoreAt = (index: number): number => {
-      if (index < 0 || index >= renderedRows.length) return 0;
-      const candidate = renderedRows[index].text.trim();
-      return candidate === target
-        ? 2
-        : target.length >= 8 && (candidate.includes(target) || target.includes(candidate)) ? 1 : 0;
-    };
-    // The anchor index is already rowShift-corrected by the caller; a verbatim
-    // match there is the row itself, no ambiguity.
-    if (scoreAt(anchor.index) === 2) return anchor.index;
-    const WINDOW = 40;
-    const start = Math.max(0, anchor.index - WINDOW);
-    const end = Math.min(renderedRows.length - 1, anchor.index + WINDOW);
-    let bestIndex = -1;
-    let bestScore = 0;
-    let bestDistance = Number.POSITIVE_INFINITY;
-    for (let index = start; index <= end; index += 1) {
-      const score = scoreAt(index);
-      if (!score) continue;
-      const distance = Math.abs(index - anchor.index);
-      if (score > bestScore || (score === bestScore && distance < bestDistance)) {
-        bestIndex = index;
-        bestScore = score;
-        bestDistance = distance;
-      }
-    }
-    return bestIndex >= 0 ? bestIndex : null;
-  }
-
-  function anchorOffsetLimit(anchor: VirtualTerminalAnchor, anchorIndex: number): number {
-    const target = anchor.text.trim();
-    let height = 0;
-    let matches = 0;
-    let lastSize = 0;
-    for (let index = anchorIndex; index < renderedRows.length; index += 1) {
-      const candidate = renderedRows[index].text.trim();
-      if (!candidate || !target.includes(candidate)) break;
-      lastSize = virtualIndex.size(index);
-      height += lastSize;
-      matches += 1;
-      if (candidate === target) break;
-    }
-    return Math.max(0, matches > 1 ? height - lastSize : height - 1);
-  }
-
-  function resetVirtualRows(
-    scrollTop: number,
-    previousAnchor = currentVirtualAnchor(scrollTop),
-  ) {
-    const width = terminalElement?.clientWidth
-      || Math.round(window.visualViewport?.width || window.innerWidth);
-    const layoutSignature = [
-      lastPreserveLayout ? 'preserve' : 'readable',
-      resizeLayoutActive ? 'resize' : 'fixed',
-      lastPreserveLineEnds ? 'line-ends' : 'wrapped',
-      lastLeasedColumns || renderedResizeColumns,
-      $interfaceSize,
-      width,
-    ].join(':');
-    if (layoutSignature !== virtualLayoutSignature) {
-      virtualLayoutSignature = layoutSignature;
-      virtualHeightCache.clear();
-      measuredRowSizes.clear();
-    } else if (virtualHeightCache.size > Math.max(2_000, renderedRows.length * 2)) {
-      virtualHeightCache.clear();
-    }
-
-    const style = terminalElement ? getComputedStyle(terminalElement) : null;
-    const parsedLineHeight = Number.parseFloat(style?.lineHeight || '');
-    const lineHeight = Number.isFinite(parsedLineHeight) && parsedLineHeight > 0 ? parsedLineHeight : 18;
-    const wrappingColumns = measuredPaneColumns()
-      || lastLeasedColumns
-      || renderedResizeColumns
-      || 80;
-    const sizes = renderedRows.map((row, index) => {
-      const measuredHere = measuredRowSizes.get(index);
-      if (measuredHere) return measuredHere;
-      const measured = virtualHeightCache.get(row.html);
-      if (measured) return measured;
-      if (row.separator) return lineHeight * 1.2;
-      // One line per row only where the row really stays on one line: a leased
-      // pane's fixed-grid rows. Everything else wraps at the width in force,
-      // and estimating those at one line parks the scroll past the content.
-      // Rows wrap in the two regimes that have a width to wrap at: engaged
-      // (the leased width, fixed grids excepted) and pending (the container).
-      // A relay that cannot lease keeps every row on one line.
-      const wraps = (!lastPreserveLayout
-        || (resizeLayoutPending && !row.wideGrid)
-        || (resizeLayoutActive && !row.fixedGrid && !row.wideGrid))
-        ? Math.max(1, Math.ceil(row.columns / wrappingColumns))
-        : 1;
-      return lineHeight * wraps;
-    });
-    virtualIndex.reset(sizes);
-    let nextTop = scrollTop;
-    // Under a held touch the anchor math still runs: callers apply only the
-    // delta over the live scrollTop, so nextTop must stay anchor-corrected —
-    // skipping it leaves content sliding under the finger with no correction.
-    if (previousAnchor && virtualIndex.length) {
-      // Content fingerprint first — a crop or a rowShift false positive can
-      // make the captured index point at the wrong row, and matching it by
-      // index is how the viewport snapped to the top. The single-row match
-      // stays as the fallback for anchors without a usable block.
-      const anchorIndex = matchingAnchorBlock(previousAnchor)
-        ?? matchingAnchorIndex(previousAnchor);
-      if (anchorIndex !== null) {
-        const anchorOffset = Math.min(
-          Math.max(0, previousAnchor.offset),
-          anchorOffsetLimit(previousAnchor, anchorIndex),
-        );
-        nextTop = terminalScreenOffset() + virtualIndex.offset(anchorIndex) + anchorOffset;
-      }
-    }
-
-    if (!lastPreserveLayout || resizeLayoutPending) virtualContentColumns = 0;
-    else {
-      virtualContentColumns = terminalScreenColumns(
-        renderedRows,
-        resizeLayoutActive,
-        lastLeasedColumns || renderedResizeColumns,
-      );
-    }
-    renderVirtualWindow(nextTop, true);
-    return nextTop;
+  // The mounted window is pure arithmetic: rowHeightPx per row.
+  function renderWindowAt(scrollTop: number, force = false) {
+    const viewportHeight = terminalElement?.clientHeight || window.innerHeight;
+    const total = renderedRows.length * rowHeightPx;
+    const top = Number.isFinite(scrollTop)
+      ? scrollTop
+      : Math.max(0, rowOrigin() + total - viewportHeight);
+    const overscan = viewportHeight * 1.5;
+    const start = Math.max(0, Math.floor((top - rowOrigin() - overscan) / rowHeightPx));
+    const end = Math.min(
+      renderedRows.length,
+      Math.ceil((top - rowOrigin() + viewportHeight + overscan) / rowHeightPx),
+    );
+    const unchanged = start === virtualStart && end === virtualEnd;
+    virtualStart = start;
+    virtualEnd = end;
+    virtualTopHeight = start * rowHeightPx;
+    virtualBottomHeight = Math.max(0, total - end * rowHeightPx);
+    if (force || !unchanged) virtualRows = mountedVirtualRows(start, end);
   }
 
   // Each row renders through a keyed each so a new frame patches changed rows
-  // in place instead of re-creating the whole window. That keeps an in-flight
-  // text selection alive and stops the full-viewport repaint flicker on every
-  // delta frame.
+  // in place instead of re-creating the window — text selection survives.
+  // Keys are GLOBAL row indices (scrollbackBase + local index), stable across
+  // local trims; the data-terminal-row attribute stays local for find.
   function mountedVirtualRows(start: number, end: number): { index: number; html: string }[] {
     const rows: { index: number; html: string }[] = [];
     for (let index = start; index < end; index += 1) {
-      const attributes = renderedRows[index].wideGrid && wideGridBlocks[index] >= 0
-        ? `<span data-terminal-row="${index}" data-terminal-wide-block="${wideGridBlocks[index]}" `
-        : `<span data-terminal-row="${index}" `;
-      rows.push({ index, html: renderedRows[index].html.replace('<span ', attributes) });
+      rows.push({
+        index: scrollbackBase + index,
+        html: renderedRows[index].html.replace('<span ', `<span data-terminal-row="${index}" `),
+      });
     }
     return rows;
-  }
-
-  // Contiguous wide box-drawn rows form one logical table. Their borders were
-  // collapsed to separators, so a separator between two wide rows continues
-  // the block instead of splitting the table into per-row scroll islands.
-  const wideGridBlocks = $derived.by(() => {
-    const blocks = new Array<number>(renderedRows.length).fill(-1);
-    let block = -1;
-    let open = false;
-    for (let index = 0; index < renderedRows.length; index += 1) {
-      if (renderedRows[index].wideGrid) {
-        if (!open) {
-          block += 1;
-          open = true;
-        }
-        blocks[index] = block;
-      } else if (!renderedRows[index].separator) {
-        open = false;
-      }
-    }
-    return blocks;
-  });
-
-  function syncWideGridScroll(event: Event) {
-    const row = event.target;
-    if (!(row instanceof HTMLElement) || row.dataset.terminalWideBlock === undefined || !terminalElement) return;
-    const block = Number(row.dataset.terminalWideBlock);
-    if (wideGridOffsetsPane !== agent.pane_id) {
-      wideGridOffsets.clear();
-      wideGridOffsetsPane = agent.pane_id;
-    }
-    if (wideGridOffsets.get(block) === row.scrollLeft) return;
-    wideGridOffsets.set(block, row.scrollLeft);
-    for (const sibling of terminalElement.querySelectorAll<HTMLElement>(`[data-terminal-wide-block="${block}"]`)) {
-      if (sibling !== row && sibling.scrollLeft !== row.scrollLeft) sibling.scrollLeft = row.scrollLeft;
-    }
-  }
-
-  function restoreWideGridScroll() {
-    if (!terminalElement || wideGridOffsetsPane !== agent.pane_id) return;
-    for (const row of terminalElement.querySelectorAll<HTMLElement>('[data-terminal-wide-block]')) {
-      const offset = wideGridOffsets.get(Number(row.dataset.terminalWideBlock));
-      if (offset && row.scrollLeft !== offset) row.scrollLeft = offset;
-    }
-  }
-
-  function renderVirtualWindow(scrollTop: number, force = false) {
-    const viewportHeight = terminalElement?.clientHeight || window.innerHeight;
-    const viewportTop = Number.isFinite(scrollTop)
-      ? scrollTop
-      : Math.max(0, virtualIndex.total - viewportHeight);
-    const range = virtualIndex.range(viewportTop, viewportHeight, viewportHeight * 1.5);
-    const unchanged = range.start === virtualStart && range.end === virtualEnd;
-    virtualStart = range.start;
-    virtualEnd = range.end;
-    virtualTopHeight = range.top;
-    virtualBottomHeight = range.bottom;
-    if (force || !unchanged) {
-      virtualRows = mountedVirtualRows(range.start, range.end);
-      queueVirtualRowObservation();
-    }
-  }
-
-  function queueVirtualRowObservation() {
-    void tick().then(observeVirtualRows);
-  }
-
-  function observeVirtualRows() {
-    if (!terminalElement) return;
-    restoreWideGridScroll();
-    if (typeof ResizeObserver === 'undefined') return;
-    virtualRowObserver ||= new ResizeObserver(measureVirtualRows);
-    virtualRowObserver.disconnect();
-    for (const row of terminalElement.querySelectorAll<HTMLElement>('[data-terminal-row]')) {
-      virtualRowObserver.observe(row);
-    }
-  }
-
-  function measureVirtualRows(entries: ResizeObserverEntry[]) {
-    if (!terminalElement || !entries.length) return;
-    if (virtualScrollResetPending) return;
-    const previousTop = touchHeld ? docScrollTop() : terminalElement.scrollTop;
-    const wasAtBottom = virtualStickToBottom;
-    // The anchor must be the row the reader actually sees at the viewport top —
-    // indexAt(previousTop) answered from the STALE index, which lands dozens of
-    // rows too deep once heights drift, so deltas of rows below the viewport
-    // were being added and the view walked down on every measure pass.
-    const anchorRecord = currentVirtualAnchor(previousTop);
-    const anchor = anchorRecord?.index
-      ?? virtualIndex.indexAt(Math.max(0, previousTop - terminalScreenOffset()));
-    let anchorDelta = 0;
-    let changed = false;
-    for (const entry of entries) {
-      const element = entry.target as HTMLElement;
-      const index = Number.parseInt(element.dataset.terminalRow || '', 10);
-      if (!Number.isInteger(index) || index < 0 || index >= renderedRows.length) continue;
-      const borderSize = Array.isArray(entry.borderBoxSize)
-        ? entry.borderBoxSize[0]
-        : entry.borderBoxSize;
-      let height = borderSize?.blockSize || entry.contentRect.height;
-      if (renderedRows[index].separator) {
-        const style = getComputedStyle(element);
-        height += (Number.parseFloat(style.marginTop) || 0)
-          + (Number.parseFloat(style.marginBottom) || 0);
-      }
-      const delta = virtualIndex.update(index, height);
-      if (!delta) continue;
-      virtualHeightCache.set(renderedRows[index].html, height);
-      measuredRowSizes.set(index, height);
-      if (index < anchor) anchorDelta += delta;
-      changed = true;
-    }
-    if (!changed) return;
-    const nextTop = wasAtBottom ? virtualIndex.total : previousTop + anchorDelta;
-    virtualScrollResetPending = true;
-    renderVirtualWindow(touchHeld ? docScrollTop() : nextTop);
-    void tick().then(() => {
-      if (!terminalElement) {
-        virtualScrollResetPending = false;
-        return;
-      }
-      // Read the pin at apply time: an up-scroll can clear it between the
-      // measure pass and this tick — honour the user's position, don't slam.
-      const stillStuck = virtualStickToBottom;
-      // A held touch owns the absolute position — a stick write never runs —
-      // but the measured-height delta still applies over the live scrollTop so
-      // spacer churn cannot slide the row out from under the finger.
-      if (touchHeld) {
-        // Measured heights above the anchor changed: fold the delta into the
-        // transform — scrollTop stays untouched for the whole hold.
-        applyHeldAnchor(terminalElement, anchorRecord, anchorDelta);
-        rememberVirtualScrollGeometry(terminalElement);
-        virtualScrollResetPending = false;
-        return;
-      }
-      terminalElement.scrollTop = stillStuck ? terminalElement.scrollHeight : nextTop;
-      if (!stillStuck
-          && terminalElement.scrollHeight - terminalElement.scrollTop
-              - terminalElement.clientHeight < 1) {
-        suppressBottomPinOnce = true;
-      }
-      rememberVirtualScrollGeometry(terminalElement);
-      virtualScrollResetPending = false;
-    });
-  }
-
-  function scheduleVirtualWindow() {
-    if (virtualWindowFrame) return;
-    virtualWindowFrame = requestAnimationFrame(() => {
-      virtualWindowFrame = 0;
-      if (terminalElement) renderVirtualWindow(docScrollTop());
-    });
   }
 
   function clearTerminalFindHighlights() {
@@ -1503,11 +987,11 @@
     const match = terminalFind.matches[normalized];
     const row = terminalRowForOffset(renderedRows, terminalFindCorpus.offsets, match.start);
     if (row < 0) return;
-    const rowTop = terminalScreenOffset() + virtualIndex.offset(row);
-    const nextTop = Math.max(0, rowTop - (terminalElement.clientHeight - virtualIndex.size(row)) / 2);
+    const rowTop = rowOrigin() + row * rowHeightPx;
+    const nextTop = Math.max(0, rowTop - (terminalElement.clientHeight - rowHeightPx) / 2);
     virtualStickToBottom = false;
     virtualScrollResetPending = true;
-    renderVirtualWindow(nextTop, true);
+    renderWindowAt(nextTop, true);
     void tick().then(() => {
       if (!terminalElement) return;
       terminalElement.scrollTop = nextTop;
@@ -2269,19 +1753,14 @@
 
 
   function jumpToBottom() {
-    // Under a held touch the pin is intent only: the bottom-window render
-    // would leave the viewport over spacer for the whole gesture since the
-    // scrollTop write below stays suppressed. Release re-derives the pin.
-    if (touchHeld) { virtualStickToBottom = true; return; }
     virtualStickToBottom = true;
     virtualScrollResetPending = true;
-    renderVirtualWindow(Number.POSITIVE_INFINITY, true);
+    renderWindowAt(Number.POSITIVE_INFINITY, true);
     void tick().then(() => {
       if (!terminalElement) {
         virtualScrollResetPending = false;
         return;
       }
-      if (touchHeld) { virtualScrollResetPending = false; return; }
       terminalElement.scrollTop = terminalElement.scrollHeight;
       virtualScrollResetPending = false;
       jumpVisible = false;
@@ -2298,40 +1777,12 @@
     if (scrollDelta < 0) scrollUpAccum += -scrollDelta;
     else if (scrollDelta > 0.5) scrollUpAccum = 0;
     const movedUp = scrollUpAccum > 2;
-    // Any reposition during a resize wait invalidates the pending anchor.
-    if (pendingResizeAnchor !== null && Math.abs(scrollDelta) >= 0.5) {
-      pendingAnchorStale = true;
-    }
     if (virtualScrollResetPending) {
       // An up-scroll while a reset apply is in flight is still user intent:
       // dropping it here left the pin alive and the pending apply slammed the
       // view back to the bottom.
-      if (movedUp) {
-        virtualStickToBottom = false;
-        // A pending resize snapshot captured while pinned must die with the
-        // pin — otherwise it re-arms on the apply that ends the wait and
-        // slams the reader back to the bottom anyway.
-        pendingResizeStick = null;
-        pendingResizeAnchor = null;
-        pendingLayoutStick = null;
-      }
+      if (movedUp) virtualStickToBottom = false;
       rememberVirtualScrollGeometry(terminalElement);
-      return;
-    }
-    if (touchHeld) {
-      // The finger owns the viewport: scrollTop no longer equals the visual
-      // position (heldOffset carries part of it), so the atBottom/pin math
-      // below would misjudge. Upward intent still drops the pin immediately;
-      // release re-derives everything from real geometry.
-      if (movedUp) {
-        virtualStickToBottom = false;
-        pendingResizeStick = null;
-        pendingResizeAnchor = null;
-        pendingLayoutStick = null;
-      }
-      jumpVisible = !virtualStickToBottom;
-      rememberVirtualScrollGeometry(terminalElement);
-      scheduleVirtualWindow();
       return;
     }
     const scrollTop = terminalElement.scrollTop;
@@ -2342,14 +1793,6 @@
     // Only a viewport/controls height change may re-pin: content growth also
     // changes scrollHeight, and a user scrolling up during a stream must win.
     const layoutChanged = Math.abs(clientHeight - virtualClientHeight) >= 1;
-    // A scroll that lands exactly at the bottom is never the user moving
-    // toward history: when corrected row heights shrink the content while
-    // pinned, the browser clamps scrollTop to the new maximum and fires a
-    // scroll event whose position is lower than the remembered one. Reading
-    // that clamp as intent dropped stick-to-bottom, so Safari — whose real
-    // row heights disagree with the estimates more than Chromium's — opened
-    // a growing gap above the transcript's end and fought every scroll with
-    // anchor-preserving corrections (issue #11's missing bottom + flicker).
     // A shrinking frame (a viewport-only refresh, a transient empty frame)
     // makes the browser clamp scrollTop down to the new maximum and fire a
     // scroll event that lands exactly at the shrunken bottom. That is the
@@ -2362,35 +1805,18 @@
     rememberVirtualScrollGeometry(terminalElement);
     if (shrinkClamp && !movedTowardHistory) {
       jumpVisible = !virtualStickToBottom;
-      scheduleVirtualWindow();
+      renderWindowAt(scrollTop);
       return;
     }
     if (movedTowardHistory) {
       virtualStickToBottom = false;
-      pendingResizeStick = null;
-      pendingResizeAnchor = null;
-      pendingLayoutStick = null;
       jumpVisible = true;
     } else if (atBottom) {
-      if (suppressBottomPinOnce) {
-        // A programmatic write just clamped at the bottom; consuming the event
-        // without re-arming the pin keeps the reader where a correction put
-        // them instead of slamming to the end on the next frame.
-        suppressBottomPinOnce = false;
-        jumpVisible = true;
-        scheduleVirtualWindow();
-        return;
-      }
       if (bottomDistance > 0.5 && scrollDelta > 0) {
-        if (pendingResizeAnchor !== null || pendingResizeStick !== null) {
-          pendingResizeStick = true;
-          pendingResizeAnchor = null;
-        }
         jumpToBottom();
         return;
       }
       virtualStickToBottom = true;
-      if (pendingResizeAnchor !== null) pendingResizeStick = true;
       jumpVisible = false;
     } else if (!virtualStickToBottom) {
       jumpVisible = true;
@@ -2398,7 +1824,7 @@
       jumpToBottom();
       return;
     }
-    scheduleVirtualWindow();
+    renderWindowAt(scrollTop);
   }
 
   function paneSizeLeaseSupported(target: Agent): boolean {
@@ -2959,33 +2385,21 @@
     <!-- Tap-to-focus only raises the software keyboard for the hidden capture
          field; the log itself stays a non-interactive scroll region. -->
   <div
-    class:resize-layout={resizeLayoutActive} class:resize-pending={resizeLayoutPending} class:wide-view={wideView}
+    class:wide-view={wideView}
     class="term-content preserve-layout"
+    style={terminalContentStyle}
     data-copy-on-select
     bind:this={terminalElement}
     role="log"
     aria-label="Agent terminal output"
     onscroll={handleScroll}
-    onpointerdown={() => { touchHeld = true; }}
     onpointerup={() => {
-      touchHeld = false;
-      releaseHeldScroll();
       if (terminalElement) {
         const gap = terminalElement.scrollHeight - terminalElement.scrollTop - terminalElement.clientHeight;
         virtualStickToBottom = gap < 48;
         jumpVisible = !virtualStickToBottom;
       }
     }}
-    onpointercancel={() => {
-      touchHeld = false;
-      releaseHeldScroll();
-      if (terminalElement) {
-        const gap = terminalElement.scrollHeight - terminalElement.scrollTop - terminalElement.clientHeight;
-        virtualStickToBottom = gap < 48;
-        jumpVisible = !virtualStickToBottom;
-      }
-    }}
-    onscrollcapture={syncWideGridScroll}
     onclick={terminalSurfaceClick}
   >
     <span
@@ -2993,7 +2407,7 @@
       aria-hidden="true"
       style="pointer-events: none; position: absolute; visibility: hidden; white-space: pre;"
     >{CELL_MEASURE_TEXT}</span>
-    <div class="term-screen" bind:this={termScreenElement} data-terminal-row-count={renderedRows.length}>
+    <div class="term-screen" data-terminal-row-count={renderedRows.length}>
       {#if virtualTopHeight > 0}
         <span class="terminal-virtual-spacer" style={`height:${virtualTopHeight}px`} aria-hidden="true"></span>
       {/if}

@@ -715,83 +715,19 @@ textarea { min-height: 6.5rem; resize: vertical; }
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  overflow-wrap: anywhere;
   overscroll-behavior: none;
-  /* The virtual scroller owns anchoring: row nodes are index-keyed, so the
-     browser's own scroll anchor tracks node identity across content swaps
-     (crops, re-renders) and compensates for the wrong row — the random-jump
-     vector. A DOM mutation here must never rewrite scrollTop unsupervised. */
+  /* The fixed-grid scroller owns anchoring: every row is exactly
+     --terminal-row-h tall, so scrollTop is a pure row index and no DOM
+     mutation may rewrite it unsupervised. */
   overflow-anchor: none;
   padding: 10px 16px 0;
-  white-space: pre-wrap;
-  word-break: normal;
+  /* Rows never wrap: one physical row = one rendered line, horizontal
+     scroll reveals the rest — the same contract a real terminal makes. */
+  white-space: pre;
 }
 .term-screen { display: block; min-width: 100%; }
 .terminal-virtual-spacer { display: block; pointer-events: none; width: 1px; }
-.term-content.preserve-layout { overflow-wrap: normal; white-space: pre; }
-.term-content.preserve-layout > .term-screen { display: grid; min-width: 100%; width: max(100%, var(--terminal-content-width, 100%)); }
-.term-content.preserve-layout.resize-layout > .term-screen { min-width: 0; }
-.term-content.preserve-layout.resize-layout > .term-screen > .ansi-line-background {
-  justify-self: start;
-  width: var(--terminal-width, auto);
-}
-.term-content.preserve-layout > .term-screen > .ansi-line { overflow: visible; }
-/* No content-visibility on terminal rows: the component virtualizes them
-   itself, mounting only a pixel-bounded window. content-visibility: auto on
-   top of that made Safari size skipped mounted rows at the one-line
-   contain-intrinsic height regardless of wrapping, corrupting scrollHeight
-   and the row measurements — the transcript loaded with its bottom hidden
-   and scrolling flickered until every row had been rendered (issue #11). */
-.term-content.preserve-layout.resize-layout > .term-screen > .ansi-line {
-  max-width: var(--terminal-width, 100%);
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-.term-content.preserve-layout.resize-layout > .term-screen > .ansi-line.terminal-grid-line {
-  max-width: none;
-  overflow-wrap: normal;
-  white-space: pre;
-}
-.term-content.preserve-layout.resize-layout .terminal-grid-line .terminal-cell-run { display: inline-block; }
-.term-content.preserve-layout.resize-layout .terminal-cell-run { display: inline; }
-/* A box-drawn row wider than the pane cannot reflow, but wrapping it destroys
-   its column alignment. It keeps its cell grid inside a per-row horizontal
-   scroller clipped at the pane width; TerminalView keeps a contiguous block's
-   rows scrolling in lockstep so the table pans as one unit. Only this row
-   scrolls - the pane itself never pans sideways. */
-.term-content.preserve-layout:is(.resize-layout, .resize-pending) > .term-screen > .ansi-line.terminal-wide-grid {
-  display: block;
-  max-width: var(--terminal-width, 100%);
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  overflow-wrap: normal;
-  white-space: pre;
-  scrollbar-width: none;
-}
-.term-content.preserve-layout .terminal-wide-grid .terminal-cell-run { display: inline-block; }
-/* No lease has landed: the pane's width is not the phone's, so column
-   alignment is already lost. Wrap at the container rather than scrolling
-   sideways - a pan survives every refresh, stranding the reader on the tails
-   of the newest lines. A leased pane keeps the rules above, where the pane
-   really is this wide. Box-drawing rows past this width are classified in
-   terminal.ts and scroll inside their own row instead of wrapping. */
-.term-content.preserve-layout.resize-pending > .term-screen {
-  min-width: 0;
-  width: 100%;
-}
-.term-content.preserve-layout.resize-pending > .term-screen > .ansi-line {
-  max-width: 100%;
-  /* `anywhere`, not `break-word`: only `anywhere` also shrinks a row's
-     min-content, which keeps one long token from holding a run wider than the
-     pane. Words still break at spaces first, so prose stays whole. */
-  overflow-wrap: anywhere;
-  /* `break-spaces`, not `pre-wrap`: terminal rows are padded out with spaces,
-     and pre-wrap lets such a run hang past the edge instead of wrapping, which
-     WebKit then reports as scrollable width - the pane pans sideways again. */
-  white-space: break-spaces;
-}
-:root[data-interface-size='regular'] :is(.activity-extract pre, .term-content) { font-size: .82rem; }
-:root[data-interface-size='large'] :is(.activity-extract pre, .term-content) { font-size: .94rem; }
+.term-content.preserve-layout > .term-screen { display: grid; min-width: 100%; width: var(--terminal-content-width, max-content); }
 .term-content.preserve-layout .terminal-cell-run { display: inline-block; }
 .term-content.preserve-layout .terminal-cell {
   display: inline-block;
@@ -799,8 +735,7 @@ textarea { min-height: 6.5rem; resize: vertical; }
   /* Probed cell advance in px. The 1ch fallback covers the pre-measurement
      frame only: it is the right intent (one character advance) on every
      engine, and beats `auto`, which would size cells to their content and
-     break fixed-grid alignment. Caps never fall back to ch — a wrong cap
-     wraps text, a wrong cell only misaligns it for one frame. */
+     break fixed-grid alignment. */
   width: var(--terminal-cell-width, 1ch);
 }
 /* Wide view: the leased pane is 240 columns wide; .term-content's own
@@ -855,7 +790,7 @@ textarea { min-height: 6.5rem; resize: vertical; }
   border-top: 1px solid currentColor;
   border-top-right-radius: .5ch;
   bottom: 0;
-  left: 0;
+  left: 50%;
   right: 50%;
   top: 50%;
 }
@@ -874,12 +809,30 @@ textarea { min-height: 6.5rem; resize: vertical; }
   border-right: .75px solid currentColor;
   bottom: 50%;
   left: 0;
-  right: 50%;
+  right: 0;
   top: 0;
 }
-.ansi-line { display: block; min-height: 1.45em; overflow: hidden; }
+.ansi-line {
+  display: block;
+  /* Fixed height is the scroll contract: scrollTop = row index × height.
+     The px var comes from the component's measured line-height, so the CSS
+     and the arithmetic can never disagree. */
+  height: var(--terminal-row-h, 1.45em);
+  overflow: hidden;
+}
 .ansi-line-background { border-radius: .12rem; }
-.term-separator { border-top: 1px solid color-mix(in srgb, var(--terminal-text) 22%, transparent); display: block; margin: .65rem 0; width: 100%; }
+.term-separator {
+  display: flex;
+  align-items: center;
+  height: var(--terminal-row-h, 1.45em);
+  overflow: hidden;
+}
+.term-separator::before {
+  border-top: 1px solid color-mix(in srgb, var(--terminal-text) 22%, transparent);
+  content: '';
+  display: block;
+  width: 100%;
+}
 .direct-type-label { font-size: .68rem; font-weight: 600; margin-inline-start: .3rem; }
 .term-content mark.terminal-find-match { background: #f2d66d; border-radius: .08rem; color: #17120a; }
 .term-content mark.terminal-find-match.active { background: #ff8a4c; box-shadow: 0 0 0 1px #fff6; color: #160a04; }
