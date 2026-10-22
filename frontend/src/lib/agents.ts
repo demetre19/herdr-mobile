@@ -39,28 +39,20 @@ export function agentStatusGroup(agent: Partial<Agent> | null | undefined): 'att
   if (status === 'idle' || status === 'ready') return 'ready';
   return 'other';
 }
-
 /**
- * Freshness within the working group: a "working" lane that has been silent
- * for a while is almost certainly stale (the relay reports Herdr's last-known
- * status, which freezes when a session dies quietly). `QUIET_AFTER_MS` is
- * five minutes — comfortably past the relay's own 15s poll cadence, so a
- * genuinely running lane never flickers amber between polls.
+ * Card tone mirrors Herdr's own status, nothing else. `last_active_at`
+ * tracks status/step transitions and pane revisions — not output — so the
+ * earlier "live vs quiet" split painted every untouched working lane green
+ * whenever its age was under five minutes, and amber stayed unreachable in
+ * practice. Liveness stays derivable client-side, but it needs a real
+ * output/cursor signal the relay does not currently send; until one exists
+ * the honest mapping is the status itself.
  */
-export const AGENT_QUIET_AFTER_MS = 5 * 60 * 1000;
-
-export function agentLiveness(agent: Partial<Agent> | null | undefined, now = Date.now()): 'live' | 'quiet' | 'settled' {
-  if (agentStatusGroup(agent) !== 'working') return 'settled';
-  const activeAt = agentLastActiveAt(agent);
-  if (!activeAt) return 'quiet';
-  return now - activeAt <= AGENT_QUIET_AFTER_MS ? 'live' : 'quiet';
-}
-
-export function agentStatusTone(agent: Partial<Agent> | null | undefined, now = Date.now()): 'danger' | 'warning' | 'success' | 'muted' {
+export function agentStatusTone(agent: Partial<Agent> | null | undefined): 'danger' | 'warning' | 'success' | 'muted' {
   const group = agentStatusGroup(agent);
   if (group === 'blocked') return 'danger';
   if (group === 'attention') return 'warning';
-  if (group === 'working') return agentLiveness(agent, now) === 'live' ? 'success' : 'warning';
+  if (group === 'working') return 'success';
   return 'muted';
 }
 
