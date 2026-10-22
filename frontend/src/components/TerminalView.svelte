@@ -100,6 +100,7 @@
   }
   let terminalElement = $state<HTMLDivElement>(null!);
   let cellMeasureElement = $state<HTMLSpanElement>(null!);
+  let boldCellMeasureElement = $state<HTMLSpanElement>(null!);
   let fileInput = $state<HTMLInputElement>(null!);
   let imageInput = $state<HTMLInputElement>(null!);
   let modifierInputElement = $state<HTMLInputElement>(null!);
@@ -358,6 +359,7 @@
     const styles = [`--terminal-row-h: ${rowHeightPx}px`];
     if (measuredCellWidth > 0) {
       styles.push(`--terminal-cell-width: ${measuredCellWidth.toFixed(4)}px`);
+      if (wideView) styles.push(`--terminal-wide-width: ${MAX_PANE_SIZE_COLUMNS * measuredCellWidth}px`);
     }
     return styles.join(';');
   });
@@ -435,6 +437,9 @@
 
   $effect(() => {
     const next = frame;
+    // Rendering is untracked below; mode changes must still invalidate the
+    // cached frame even when the relay has no new output to send.
+    void wideView;
     const matchingFrame = next?.paneId === agent.pane_id ? next : undefined;
     const preserve = true;
     const preserveLineEnds = !resizeSessionActive && !readOnly;
@@ -578,6 +583,8 @@
       if (!renderedRows.length) return;
       const stick = virtualStickToBottom;
       resetVirtualScroll(element, stick);
+      const next = frame;
+      if (next?.paneId === agent.pane_id) void applyFrame(next);
     });
     const observer = new ResizeObserver(() => {
       const nextWidth = element.clientWidth;
@@ -588,6 +595,8 @@
         // Flag only — a position check here re-pins when the user deliberately
         // scrolled up a hair, and a clamped scrollTop looks identical.
         resetVirtualScroll(element, virtualStickToBottom);
+        const next = frame;
+        if (next?.paneId === agent.pane_id) void applyFrame(next);
       } else if (heightChanged && virtualStickToBottom) {
         jumpToBottom();
       } else {
@@ -1853,7 +1862,10 @@
 
   function measuredPaneColumns(): number | null {
     if (!terminalElement || !cellMeasureElement) return null;
-    const cellWidth = cellMeasureElement.getBoundingClientRect().width / CELL_MEASURE_TEXT.length;
+    const cellWidth = Math.max(
+      cellMeasureElement.getBoundingClientRect().width,
+      boldCellMeasureElement?.getBoundingClientRect().width || 0,
+    ) / CELL_MEASURE_TEXT.length;
     const style = getComputedStyle(terminalElement);
     const horizontalPadding = (Number.parseFloat(style.paddingLeft) || 0)
       + (Number.parseFloat(style.paddingRight) || 0);
@@ -2407,6 +2419,11 @@
       bind:this={cellMeasureElement}
       aria-hidden="true"
       style="pointer-events: none; position: absolute; visibility: hidden; white-space: pre;"
+    >{CELL_MEASURE_TEXT}</span>
+    <span
+      bind:this={boldCellMeasureElement}
+      aria-hidden="true"
+      style="font-weight: 700; pointer-events: none; position: absolute; visibility: hidden; white-space: pre;"
     >{CELL_MEASURE_TEXT}</span>
     <div class="term-screen" data-terminal-row-count={renderedRows.length}>
       {#if virtualTopHeight > 0}

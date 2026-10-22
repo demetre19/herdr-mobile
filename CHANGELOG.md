@@ -5,6 +5,18 @@ project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.25] - 2026-10-22 (fork: demetre19/herdr-mobile)
+
+### Fixed
+
+- Terminal rows no longer horizontally clip styled or fallback glyphs. Wide
+  view reserves the full measured 240-column canvas for sideways panning.
+- Cached frames repaint immediately when wide mode, usable width, or interface
+  size changes, without waiting for new agent output.
+- Normal-mode wrapping respects Unicode grapheme/display-column boundaries
+  and carries bounded active ANSI styles across continuation rows.
+- Fitting table borders remain intact instead of collapsing into separators.
+
 ## [1.0.16] - 2026-10-08 (fork: demetre19/herdr-mobile)
 
 ### Fixed

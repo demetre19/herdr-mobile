@@ -742,6 +742,7 @@ textarea { min-height: 6.5rem; resize: vertical; }
    overflow:auto already pans horizontally — just keep the scrollbar thin and
    stop sideways momentum leaking to the page. */
 .term-content.wide-view { overscroll-behavior-x: contain; scrollbar-width: thin; }
+.term-content.wide-view > .term-screen { min-width: max(100%, var(--terminal-wide-width, 240ch)); }
 .term-content.preserve-layout .terminal-cell-wide { width: calc(2 * var(--terminal-cell-width, 1ch)); }
 .term-content.preserve-layout .terminal-cell-horizontal,
 .term-content.preserve-layout .terminal-cell-box {
@@ -818,7 +819,11 @@ textarea { min-height: 6.5rem; resize: vertical; }
      The px var comes from the component's measured line-height, so the CSS
      and the arithmetic can never disagree. */
   height: var(--terminal-row-h, 1.45em);
-  overflow: hidden;
+  /* Keep the physical row height, not a horizontal clipping box. Styled and
+     fallback glyphs must remain reachable even when their advance differs
+     from the terminal's column count. The outer log owns both scroll axes. */
+  min-width: 100%;
+  width: max-content;
 }
 .ansi-line-background { border-radius: .12rem; }
 .term-separator {

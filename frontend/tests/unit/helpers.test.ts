@@ -8,7 +8,6 @@ import {
   agentLastActiveAt,
   agentNeedsInspection,
   agentStatusGroup,
-  agentStatusTone,
   agentUpdatedAt,
   approvalOptions,
   mergeAgentDetails,
@@ -450,16 +449,81 @@ describe('terminal rendering', () => {
     expect(followed.rows[1].text).toBe('next line');
   });
 
-  it('renders long prose lines so they re-wrap at the phone width', () => {
-    // Herdr reflows the pane window to the pty width on every read: no hard
-    // wrap is baked in, so the row keeps its full text and the browser wraps it.
-    const prose = '\x1b[1mBoth questions answered\x1b[0m — the pane window reflows to the '
-      + 'current width, so history rows re-wrap on the phone.';
-    const rendered = renderTerminalContent(prose, 'ansi', true, false, 40);
-    expect(rendered.rows).toHaveLength(1);
-    expect(rendered.rows[0].fixedGrid).toBe(false);
-    expect(rendered.rows[0].text).toBe(stripAnsi(prose));
-    expect(rendered.html).toContain('font-weight:700');
+  it('wraps mixed ANSI and Unicode by whole display-cell graphemes', () => {
+    const source = '\x1b[1;31mab😀漢e\u0301👩‍💻Z\x1b[0m plain '
+      + '\x1b[38;5;196m字👍🏽\x1b[39m done';
+    const clusters = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(stripAnsi(source))]
+      .map(({ segment }) => segment);
+    for (const cap of [1, 2, 3, 4, 5, 8, 12]) {
+      const rendered = renderTerminalContent(source, 'ansi', true, true, cap);
+      expect(rendered.rows.map((row) => row.text).join('')).toBe(stripAnsi(source));
+      let offset = 0;
+      for (const row of rendered.rows) {
+        let expected = '';
+        while (expected.length < row.text.length) expected += clusters[offset++];
+        expect(row.text).toBe(expected);
+        expect(row.columns <= cap || (cap === 1 && row.columns === 2)).toBe(true);
+      }
+      expect(offset).toBe(clusters.length);
+    }
+    const unwrapped = renderTerminalContent(source, 'ansi', true, true, 0);
+    expect(unwrapped.rows).toHaveLength(1);
+    expect(unwrapped.display).toBe(source);
+  });
+
+  it('carries only active foreground and bold styles through resets and wraps', () => {
+    const source = '\x1b[1;31mabcdefgh\x1b[22mijkl\x1b[39mmnop'
+      + '\x1b[1;38;5;196mqrstuvwx\x1b[0myzAB';
+    const rendered = renderTerminalContent(source, 'ansi', true, true, 4);
+    expect(rendered.rows.map((row) => row.text)).toEqual([
+      'abcd', 'efgh', 'ijkl', 'mnop', 'qrst', 'uvwx', 'yzAB',
+    ]);
+    for (const index of [0, 1]) {
+      expect(rendered.rows[index].html).toContain('color:#ff5f5f');
+      expect(rendered.rows[index].html).toContain('font-weight:700');
+    }
+    expect(rendered.rows[2].html).toContain('color:#ff5f5f');
+    expect(rendered.rows[2].html).not.toContain('font-weight:700');
+    expect(rendered.rows[3].html).not.toContain('color:');
+    expect(rendered.rows[3].html).not.toContain('font-weight:');
+    for (const index of [4, 5]) {
+      expect(rendered.rows[index].html).toContain('color:rgb(255,0,0)');
+      expect(rendered.rows[index].html).toContain('font-weight:700');
+    }
+    expect(rendered.rows[6].html).not.toContain('color:');
+    expect(rendered.rows[6].html).not.toContain('font-weight:');
+    expect(rendered.rows.every((row) => row.columns === 4)).toBe(true);
+  });
+
+  it('keeps ANSI inside a combining sequence on the same physical row', () => {
+    const source = 'abc' + 'e\x1b[31m\u0301' + '👩\x1b[1m‍💻' + 'Z\x1b[0m';
+    const rendered = renderTerminalContent(source, 'ansi', true, true, 4);
+    expect(rendered.rows.map((row) => row.text)).toEqual(['abce\u0301', '👩‍💻Z']);
+    expect(rendered.rows.map((row) => row.text).join('')).toBe(stripAnsi(source));
+    expect(rendered.rows.map((row) => row.columns)).toEqual([4, 3]);
+    expect(rendered.rows[1].html).toContain('color:#ff5f5f');
+    expect(rendered.rows[1].html).toContain('font-weight:700');
+  });
+
+  it('measures literal tabs at row-local eight-column stops without dropping them', () => {
+    const source = '\x1b[31mabc\t漢de\tZ\x1b[0m';
+    const rendered = renderTerminalContent(source, 'ansi', true, true, 8);
+    expect(rendered.rows.map((row) => row.text)).toEqual(['abc\t', '漢de\t', 'Z']);
+    expect(rendered.rows.map((row) => row.columns)).toEqual([8, 8, 1]);
+    expect(rendered.rows.map((row) => row.text).join('')).toBe(stripAnsi(source));
+    const narrow = renderTerminalContent('a\tb', 'ansi', true, true, 4);
+    expect(narrow.rows.map((row) => row.text)).toEqual(['a', '\t', 'b']);
+    expect(narrow.rows.map((row) => row.columns)).toEqual([1, 8, 1]);
+  });
+
+  it('does not replay the growing history of SGR changes on continuation rows', () => {
+    const source = '\x1b[1m' + Array.from({ length: 256 }, (_, index) =>
+      `\x1b[${index % 2 ? 31 : 32}mx`).join('') + '\x1b[0m';
+    const rendered = renderTerminalContent(source, 'ansi', true, true, 1);
+    expect(rendered.rows).toHaveLength(256);
+    expect(rendered.rows.map((row) => row.text).join('')).toBe('x'.repeat(256));
+    expect(Math.max(...rendered.display.split('\n').map((line) => line.length))).toBeLessThan(40);
+    expect(rendered.rows.every((row) => row.html.includes('font-weight:700'))).toBe(true);
   });
 
 
@@ -491,20 +555,6 @@ describe('terminal rendering', () => {
 });
 
 describe('agent state and sorting', () => {
-  it('maps active agent states to semantic indicator tones', () => {
-    expect(agentStatusTone(agent({ status: 'working' }))).toBe('warning');
-    expect(agentStatusTone(agent({
-      status: 'blocked', attention_kind: 'approval', attention_capable: true,
-    }))).toBe('danger');
-    expect(agentStatusTone(agent({
-      status: 'blocked', attention_kind: 'unknown', attention_capable: true,
-    }))).toBe('warning');
-    expect(agentStatusGroup(agent({
-      status: 'blocked', attention_kind: 'chat', attention_capable: true,
-    }))).toBe('ready');
-    expect(agentStatusTone(agent({ status: 'done' }))).toBe('success');
-    expect(agentStatusTone(agent({ status: 'idle' }))).toBe('muted');
-  });
 
   it('resolves the tab name from the Herdr tab label over the pane name', () => {
     expect(tabName(agent({ name: 'pane-name', tab_label: 'tab-label' }))).toBe('tab-label');

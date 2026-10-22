@@ -826,16 +826,6 @@ function isHorizontalBorderLine(line: string): boolean {
   return strokes * 2 >= characters.length;
 }
 
-function responsiveTerminalGridLine(line: string, maxColumns: number): string {
-  if (maxColumns < 1
-    || !hasTerminalBoxCell(line)
-    || terminalTextColumns(stripAnsi(line)) <= maxColumns) return line;
-  if (isSeparatorOnlyLine(line) || isHorizontalBorderLine(line)) return TERMINAL_SEPARATOR_TOKEN;
-  // A stale-width content row keeps its cells: it renders as a fixed grid
-  // inside its own horizontal scroller instead of wrapping into misaligned
-  // fragments. Only borders degrade, because a scrolling rule shows nothing.
-  return line;
-}
 
 export function terminalHtmlRows(
   text: string,
@@ -902,31 +892,83 @@ export function terminalHtml(
     .join('');
 }
 
-// A row wider than the pane wraps at the physical-line level — every
-// continuation becomes its own fixed-height row in the scrollback, which is
-// what keeps scrollTop a pure row index. Wrap is ANSI-safe: escapes are
-// skipped when finding the boundary, and each continuation replays the
-// active SGR prefix so colours survive the break. Box-drawn rows and pure
-// borders still collapse to a separator when they exceed the cap.
+// Wrap physical lines into fixed-height rows, never UTF-16 offsets or browser
+// multiline boxes. Carry only the renderer's active SGR attributes, not the
+// growing history of escapes. Tables keep their existing per-row scroller.
 function wrapTerminalLine(line: string, maxColumns: number): string[] {
   if (maxColumns < 1) return [line];
+  const plain = stripAnsi(line);
+  if (terminalTextColumns(plain) <= maxColumns) return [line];
   if (hasTerminalBoxCell(line)) {
     if (isSeparatorOnlyLine(line) || isHorizontalBorderLine(line)) return [TERMINAL_SEPARATOR_TOKEN];
     return [line];
   }
-  const columns = terminalTextColumns(stripAnsi(line));
-  if (columns <= maxColumns) return [line];
+
+  const active = new Map<number, string>();
+  const ansi = /\x1b\[[0-9;?]*[ -/]*[@-~]/y;
   const out: string[] = [];
-  let rest = line;
-  while (terminalTextColumns(stripAnsi(rest)) > maxColumns) {
-    const cut = rawIndexAtVisibleOffset(rest, maxColumns);
-    out.push(rest.slice(0, cut));
-    // Re-apply the SGR codes that were active at the cut so the next row
-    // continues in the same colours; a bare reset would lose them.
-    const prefix = rest.slice(0, cut).match(/(?:\x1b\[[0-9;?]*[ -/]*[@-~])+/g) || [];
-    rest = (prefix.length ? prefix.join('') : '') + rest.slice(cut);
+  let rawIndex = 0;
+  let row = '';
+  let column = 0;
+  const appendEscapes = () => {
+    ansi.lastIndex = rawIndex;
+    let match = ansi.exec(line);
+    while (match) {
+      const escape = match[0];
+      row += escape;
+      rawIndex += escape.length;
+      if (/^\x1b\[[0-9;]*m$/.test(escape)) {
+        const codes = escape.slice(2, -1).split(';').map(Number);
+        for (let position = 0; position < codes.length; position += 1) {
+          const code = codes[position];
+          if (code === 0) active.clear();
+          else if (code >= 1 && code <= 4) active.set(code, String(code));
+          else if (code === 22) {
+            active.delete(1);
+            active.delete(2);
+          } else if (code === 23) active.delete(3);
+          else if (code === 24) active.delete(4);
+          else if (code === 39) active.delete(30);
+          else if (code === 49) active.delete(40);
+          else if (code === 38 || code === 48) {
+            const { consumed } = ansiExtendedColor(codes, position);
+            if (consumed) active.set(code === 38 ? 30 : 40, codes.slice(position, position + consumed + 1).join(';'));
+            position += consumed;
+          } else if (scheme.colors[code]) active.set(30, String(code));
+          else if (scheme.colors[code - 10]) active.set(40, String(code));
+        }
+      }
+      ansi.lastIndex = rawIndex;
+      match = ansi.exec(line);
+    }
+  };
+
+  // Segment the whole visible line so even ANSI inserted inside a combining
+  // sequence cannot turn a cluster into two independently wrapped fragments.
+  for (const grapheme of terminalGraphemes(plain)) {
+    let width = grapheme === '\t' ? 8 - (column % 8) : terminalGraphemeWidth(grapheme);
+    let continued = false;
+    if (column > 0 && column + width > maxColumns) {
+      out.push(row);
+      row = '';
+      continued = true;
+      column = 0;
+      if (grapheme === '\t') width = 8;
+    }
+    appendEscapes();
+    if (continued) row = [...active.values()].map((codes) => `\x1b[${codes}m`).join('') + row;
+    let remaining = grapheme.length;
+    while (remaining > 0) {
+      appendEscapes();
+      const length = (line.codePointAt(rawIndex) || 0) > 0xFFFF ? 2 : 1;
+      row += line.slice(rawIndex, rawIndex + length);
+      rawIndex += length;
+      remaining -= length;
+    }
+    column += width;
   }
-  out.push(rest);
+  appendEscapes();
+  out.push(row);
   return out;
 }
 

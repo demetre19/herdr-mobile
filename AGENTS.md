@@ -54,3 +54,15 @@
   (`scripts/build.sh`), not `git describe`, so the semver check stays valid.
 - App update state is driven only by the same-origin `/version.json` check;
   upstream relay versions never trigger `deployment-required`.
+
+## Terminal rendering
+
+- Keep fixed-height virtual rows: regular view wraps text into physical rows
+  before rendering; never restore CSS multiline wrapping or browser anchoring.
+- Wrapping uses grapheme display columns and carries active ANSI styles.
+  Mode, interface-size, and width changes must repaint the cached frame.
+- The outer terminal owns horizontal scrolling. Row boxes must not clip text;
+  wide view reserves the measured 240-column canvas even for short snapshots.
+- Verify compact/regular/large with styled ANSI and Unicode, touch-pan to the
+  last character, and streaming while unpinned. Plain text overflow alone is
+  not sufficient evidence of device correctness.
