@@ -43,7 +43,6 @@ const geo = () => page.evaluate(() => {
 // --- Test 1: pinned at bottom follows appended+cropped frames -------------
 let g = await geo();
 check('starts pinned at bottom', g.bottom < 2, `bottom=${g.bottom.toFixed(1)}`);
-const h0 = g.h;
 // Simulate relay snapshots: grow + front-crop (content beyond 1000 rows).
 let allLines = Array.from({ length: 120 }, (_, i) => `line ${String(i).padStart(4, '0')} output text`);
 for (let n = 0; n < 40; n++) {
