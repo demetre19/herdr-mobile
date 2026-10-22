@@ -727,7 +727,7 @@ textarea { min-height: 6.5rem; resize: vertical; }
 }
 .term-screen { display: block; min-width: 100%; }
 .terminal-virtual-spacer { display: block; pointer-events: none; width: 1px; }
-.term-content.preserve-layout > .term-screen { display: grid; min-width: 100%; width: var(--terminal-content-width, max-content); }
+.term-content.preserve-layout > .term-screen { display: grid; min-width: 100%; width: max-content; }
 .term-content.preserve-layout .terminal-cell-run { display: inline-block; }
 .term-content.preserve-layout .terminal-cell {
   display: inline-block;

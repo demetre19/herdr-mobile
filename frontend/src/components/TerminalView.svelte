@@ -149,7 +149,6 @@
   let virtualRows = $state<{ index: number; html: string }[]>([]);
   let virtualTopHeight = $state(0);
   let virtualBottomHeight = $state(0);
-  let virtualContentColumns = $state(0);
   let virtualStart = 0;
   let virtualEnd = 0;
   // Fixed-grid scrollback: every row is exactly rowHeightPx tall and occupies
@@ -358,9 +357,6 @@
     const styles = [`--terminal-row-h: ${rowHeightPx}px`];
     if (measuredCellWidth > 0) {
       styles.push(`--terminal-cell-width: ${measuredCellWidth.toFixed(4)}px`);
-      if (virtualContentColumns > 0) {
-        styles.push(`--terminal-content-width: ${(virtualContentColumns * measuredCellWidth).toFixed(4)}px`);
-      }
     }
     return styles.join(';');
   });
@@ -764,7 +760,6 @@
     const trimmed = spliceScrollback(rendered.rows);
     virtualStickToBottom = stick;
     virtualScrollResetPending = Boolean(terminalElement);
-    virtualContentColumns = renderedRows.reduce((max, row) => Math.max(max, row.columns), 0);
     renderWindowAt(
       stick ? Number.POSITIVE_INFINITY
         : Math.max(0, (terminalElement?.scrollTop || 0) - trimmed * rowHeightPx),
