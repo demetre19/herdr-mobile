@@ -70,4 +70,14 @@
   not sufficient evidence of device correctness.
 - Normal mode must bound ALL content rows, including box-decorated prose and
   stale-width tables from existing lanes. Only wide mode may preserve their
-  original width. Test `scrollWidth <= clientWidth`, not just plain prose.
+
+## Agent lane liveness
+
+- `agentLiveness` (`frontend/src/lib/agents.ts`) splits working lanes by
+  `last_active_at`: active within `AGENT_QUIET_AFTER_MS` (5 min) reads
+  live, older or missing reads quiet, non-working reads settled.
+- Live lanes pulse green around the status dot and take a green card
+  border; quiet lanes take an amber border; dots never move. Threshold is
+  far above the 15s push cadence so genuine runners never flicker.
+- Liveness rides the 60s `relativeNow` ticker already in AgentList — no
+  new timers, no extra polling, no protocol change.

@@ -4,10 +4,13 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { activityForNotification, activityMatchesSearch } from '$lib/activity';
 import {
+  AGENT_QUIET_AFTER_MS,
   agentActivitySeq,
   agentLastActiveAt,
+  agentLiveness,
   agentNeedsInspection,
   agentStatusGroup,
+  agentStatusTone,
   agentUpdatedAt,
   approvalOptions,
   mergeAgentDetails,
@@ -618,6 +621,21 @@ describe('agent state and sorting', () => {
     expect(sessionName({ session: '/home/user/.omp/session.jsonl' })).toBe('');
     expect(sessionName({ session: '019ff024-28dd-7000-8fc4-6961c8ca619b' })).toBe('');
     expect(sessionName({ session_name: '', session: 'stale legacy title' })).toBe('');
+  });
+
+  it('splits working lanes into live and quiet by recent activity', () => {
+    const now = 1_700_000_000_000;
+    expect(agentLiveness(agent({ status: 'working', last_active_at: now }), now)).toBe('live');
+    expect(agentLiveness(agent({ status: 'working', last_active_at: now - AGENT_QUIET_AFTER_MS }), now)).toBe('live');
+    expect(agentLiveness(agent({ status: 'working', last_active_at: now - AGENT_QUIET_AFTER_MS - 1 }), now)).toBe('quiet');
+    expect(agentLiveness(agent({ status: 'working' }), now)).toBe('quiet');
+    expect(agentLiveness(agent({ status: 'running', last_active_at: now }), now)).toBe('live');
+    expect(agentLiveness(agent({ status: 'done', last_active_at: now }), now)).toBe('settled');
+    expect(agentLiveness(agent({ status: 'idle', last_active_at: now }), now)).toBe('settled');
+    // Live reads green, quiet reads amber — done stays muted-era amber via tone.
+    expect(agentStatusTone(agent({ status: 'working', last_active_at: now }), now)).toBe('success');
+    expect(agentStatusTone(agent({ status: 'working', last_active_at: now - AGENT_QUIET_AFTER_MS - 1 }), now)).toBe('warning');
+    expect(agentStatusTone(agent({ status: 'done' }), now)).toBe('muted');
   });
 });
 

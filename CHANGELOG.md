@@ -5,6 +5,14 @@ project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Agent lanes now show liveness at a glance: a lane active in the last five
+  minutes pulses green around its status dot with a green card border, a
+  working-but-quiet lane reads amber, and done/idle lanes stay neutral.
+  The signal derives from the relay's existing activity timestamps, so
+  stale-working lanes no longer glow green and no extra polling is added.
+
 ## [1.0.26] - 2026-10-22 (fork: demetre19/herdr-mobile)
 
 ### Changed

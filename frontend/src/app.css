@@ -448,6 +448,20 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .status-warning { background: var(--warning); }
 .status-muted { background: var(--muted); }
 .status-dot.hollow { background: transparent; border: 1.5px solid var(--muted); }
+/* Live lane: the working dot breathes so a glance tells a running lane from
+   a stale one. Everything stays inside the theme tokens. */
+.status-live { background: var(--success); animation: status-live-pulse 1.6s ease-in-out infinite; }
+@keyframes status-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px color-mix(in srgb, var(--success) 55%, transparent); }
+  50% { box-shadow: 0 0 0 2px var(--card), 0 0 0 7px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-live { animation: none; }
+}
+/* State outline: the card border takes the state color so the list reads at
+   a glance — success = live or done, warning = quiet or needs input. */
+.agent-card.card-live { border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
+.agent-card.card-quiet { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
 
 .empty-state { color: var(--muted); padding: 3rem 1rem; text-align: center; }
 .empty-state h2 { color: var(--foreground); font-size: 1.05rem; }

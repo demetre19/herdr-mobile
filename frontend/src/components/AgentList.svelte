@@ -5,6 +5,7 @@
   import AppDialog from '$components/ui/AppDialog.svelte';
   import {
     agentLastActiveAt,
+    agentLiveness,
     agentStatusGroup,
     agentStatusTone,
     approvalButtonTone,
@@ -850,14 +851,15 @@
       {@const interaction = questionInteraction(agent)}
       {@const options = approvalOptions(agent)}
       {@const group = agentStatusGroup(agent)}
-      {@const tone = agentStatusTone(agent)}
+      {@const liveness = agentLiveness(agent, relativeNow)}
+      {@const tone = agentStatusTone(agent, relativeNow)}
       {@const blocked = group === 'blocked'}
       {@const needsInspection = group === 'attention'}
       {@const meta = agentMeta(agent, compact)}
       {@const age = relativeAge(agent)}
       {@const agentPath = compact ? relayPath(agent.relay_id, String(agent.cwd || '')) : ''}
       {@const inventoryReady = !connections.has(agent.relay_id) || connections.get(agent.relay_id)?.inventory.state === 'ready'}
-      <article class:blocked class:compact-agent-card={compact} class:stale={!inventoryReady} class:pin-dragging={pinDrag !== null && pinDrag.kind === pinKind && pinDrag.sourceKey === agent.pane_id} class="agent-card" data-pin-key={pinKind ? agent.pane_id : undefined} style:transform={pinKind ? pinShift(agent.pane_id) || undefined : undefined} use:pinPress={{ kind: pinKind, key: agent.pane_id }}>
+      <article class:blocked class:compact-agent-card={compact} class:stale={!inventoryReady} class:card-live={liveness === 'live'} class:card-quiet={liveness === 'quiet'} class:pin-dragging={pinDrag !== null && pinDrag.kind === pinKind && pinDrag.sourceKey === agent.pane_id} class="agent-card" data-pin-key={pinKind ? agent.pane_id : undefined} style:transform={pinKind ? pinShift(agent.pane_id) || undefined : undefined} use:pinPress={{ kind: pinKind, key: agent.pane_id }}>
         <button
           class="agent-open"
           aria-label={`Open ${displayName(agent)} on ${hostLabel(agent)}`}
@@ -872,7 +874,7 @@
         >
           <span class="agent-identity">
             <AgentLogo agent={agent.agent} />
-            <span class={`status-dot status-${tone}`} class:hollow={group === 'ready'} aria-hidden="true"></span>
+            <span class={`status-dot status-${tone}`} class:hollow={group === 'ready'} class:status-live={liveness === 'live'} aria-hidden="true"></span>
           </span>
           <span class="agent-copy">
             <span class="agent-title-row">
