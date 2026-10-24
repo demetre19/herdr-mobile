@@ -3,7 +3,24 @@
 Notable user-facing changes to Herdr Mobile Relay are documented here. The
 project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.30] - 2026-10-24 (fork: demetre19/herdr-mobile)
+
+### Added
+
+- The ↔ key is a gesture pad: press-drag locks a direction and sends that
+  arrow; holding repeats every 100ms until release. A tap still opens the
+  arrow popup, whose buttons now hold-repeat too.
+- Detected-menu arrow actions hold-repeat at the same cadence — a long press
+  cycles options instead of one step per tap.
+
+### Fixed
+
+- Long-press repeats no longer die on Android: Chrome's long-press
+  `contextmenu` event pointer-cancelled the button milliseconds after the
+  press, so the repeat interval never fired. Context menu + selection
+  suppressed on every hold surface.
+
+## [1.0.29] - 2026-10-24 (fork: demetre19/herdr-mobile)
 
 ### Fixed
 

@@ -924,6 +924,16 @@ textarea { min-height: 6.5rem; resize: vertical; }
 button.key-flash { background: color-mix(in srgb, var(--primary) 26%, var(--background)) !important; }
 button.key-flash-error { background: color-mix(in srgb, var(--danger) 30%, var(--background)) !important; }
 .modifier-menu, .arrow-menu, .fkey-menu { position: relative; }
+/* The ↔ button is a drag-pad: without touch-action:none the browser starts a
+   scroll on pointermove and the gesture dies mid-drag. Same for the popup
+   arrows' hold-repeat, the detected-menu arrows, and the floating pad. */
+.arrow-menu .button, .arrow-popup button, .generic-menu-actions .button, .terminal-copy .button {
+  touch-action: none;
+  -webkit-user-select: none; -moz-user-select: none; user-select: none;
+  -webkit-touch-callout: none;
+}
+/* Held direction lights the pad like a pressed key. */
+.arrow-menu .button.arrow-pad-active { background: color-mix(in srgb, var(--primary) 26%, var(--background)); }
 .modifier-key-input { border: 0; height: 1px; left: 50%; opacity: 0; padding: 0; pointer-events: none; position: absolute; width: 1px; }
 .modifier-menu .button[aria-pressed='true'] { background: var(--primary); color: var(--primary-foreground); }
 /* Inline-level buttons here would align on the text baseline, which drops Alt

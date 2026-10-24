@@ -181,6 +181,25 @@
   let jumpVisible = $state(false);
   let arrowsOpen = $state(false);
   let fkeysOpen = $state(false);
+  // Arrow pad: the ↔ button is a gesture pad — press-drag locks a direction
+  // and sends that arrow; holding repeats it every 200ms (standard on-screen
+  // key-repeat cadence) until release. A tap (or keyboard activation) still
+  // opens the four-arrow popup, whose buttons share the same hold-repeat.
+  type ArrowDirection = 'up' | 'down' | 'left' | 'right';
+  const ARROW_PAD_SLOP_PX = 12;
+  const ARROW_REPEAT_MS = 100;
+  const ARROW_KEY_LABELS: Record<ArrowDirection, { key: string; label: string }> = {
+    up: { key: 'Up', label: 'Up' },
+    down: { key: 'Down', label: 'Down' },
+    left: { key: 'Left', label: 'Left' },
+    right: { key: 'Right', label: 'Right' },
+  };
+  let arrowPadDir = $state<ArrowDirection | null>(null);
+  let arrowPadPointer = 0;
+  let arrowPadX = 0;
+  let arrowPadY = 0;
+  let arrowPadSuppressClick = false;
+  let arrowRepeatTimer: ReturnType<typeof setInterval> | undefined;
   let findOpen = $state(false);
   // Wide view: lease the pane at the relay's 240-column cap so ASCII diagrams
   // and wide tables render unwrapped; the terminal scrolls horizontally.
@@ -731,6 +750,7 @@
       clearInterval(refresh);
       clearInterval(refreshPaneSizeLease);
       if (keyFlashTimer) clearTimeout(keyFlashTimer);
+      stopArrowRepeat();
       if (keyReadTimer) clearTimeout(keyReadTimer);
       for (const command of keyQueue.splice(0)) command.resolve(false);
       relayStore.unwatchPane(agent);
@@ -1533,6 +1553,113 @@
     sendTerminalKey('Tab', 'Tab', 'tab');
   }
 
+  function sendArrow(direction: ArrowDirection) {
+    const { key, label } = ARROW_KEY_LABELS[direction];
+    sendTerminalKey(key, label, `arrow-${direction}`);
+  }
+
+  function startArrowRepeat(direction: ArrowDirection) {
+    stopArrowRepeat();
+    arrowRepeatTimer = setInterval(() => sendArrow(direction), ARROW_REPEAT_MS);
+  }
+
+  function stopArrowRepeat() {
+    if (arrowRepeatTimer) {
+      clearInterval(arrowRepeatTimer);
+      arrowRepeatTimer = undefined;
+    }
+  }
+
+  function arrowPadDown(event: PointerEvent) {
+    if (arrowPadPointer) return;
+    event.preventDefault();
+    arrowPadPointer = event.pointerId;
+    arrowPadX = event.clientX;
+    arrowPadY = event.clientY;
+    arrowPadDir = null;
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+
+  function arrowPadMove(event: PointerEvent) {
+    if (event.pointerId !== arrowPadPointer || arrowPadDir) return;
+    const dx = event.clientX - arrowPadX;
+    const dy = event.clientY - arrowPadY;
+    if (Math.abs(dx) < ARROW_PAD_SLOP_PX && Math.abs(dy) < ARROW_PAD_SLOP_PX) return;
+    arrowPadDir = Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+    sendArrow(arrowPadDir);
+    startArrowRepeat(arrowPadDir);
+  }
+
+  function arrowPadEnd(event: PointerEvent) {
+    if (event.pointerId !== arrowPadPointer) return;
+    arrowPadPointer = 0;
+    arrowPadSuppressClick = true;
+    stopArrowRepeat();
+    if (arrowPadDir === null) {
+      arrowsOpen = !arrowsOpen;
+      fkeysOpen = false;
+      ctrlChordMenuOpen = false;
+    }
+    arrowPadDir = null;
+  }
+
+  function arrowPadCancel(event: PointerEvent) {
+    if (event.pointerId !== arrowPadPointer) return;
+    arrowPadPointer = 0;
+    arrowPadDir = null;
+    stopArrowRepeat();
+  }
+
+  function arrowPadClick() {
+    if (arrowPadSuppressClick) {
+      arrowPadSuppressClick = false;
+      return;
+    }
+    // Keyboard/other non-pointer activation.
+    arrowsOpen = !arrowsOpen;
+    fkeysOpen = false;
+    ctrlChordMenuOpen = false;
+  }
+
+  function popupArrowDown(direction: ArrowDirection) {
+    return (event: PointerEvent) => {
+      event.preventDefault();
+      arrowPadSuppressClick = true;
+      sendArrow(direction);
+      startArrowRepeat(direction);
+      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    };
+  }
+
+  function popupArrowEnd(event: PointerEvent) {
+    event.preventDefault();
+    stopArrowRepeat();
+  }
+
+  // Hold-repeat for the detected-menu arrow buttons (same 200ms cadence as
+  // the swipe pad). Direction actions only — a held "Cancel" is not something
+  // worth repeating.
+  function menuActionDown(action: { keys: string[]; label: string }) {
+    return (event: PointerEvent) => {
+      event.preventDefault();
+      // Long-press on Android fires contextmenu, which pointercancels the
+      // button and kills the repeat before the first tick.
+      void sendKeys(action.keys, action.label);
+      const [first] = action.keys;
+      if (action.keys.length === 1 && ['Up', 'Down', 'Left', 'Right'].includes(first)) {
+        stopArrowRepeat();
+        arrowRepeatTimer = setInterval(() => void sendKeys(action.keys, action.label), ARROW_REPEAT_MS);
+      }
+      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    };
+  }
+
+  function menuActionEnd(event: PointerEvent) {
+    event.preventDefault();
+    stopArrowRepeat();
+  }
+
+
   // Tap ^ opens a chord menu (same pattern as the arrow/F-key pads): the
   // pane's own agent leads with its most useful chord (OMP's Ctrl+P role
   // switcher, Claude's Esc interrupt, …), universal control chords follow.
@@ -2272,13 +2399,13 @@
   {#if arrowsOpen}
     <div class="arrow-popup">
       <span aria-hidden="true"></span>
-      <button class={flashClass('up')} disabled={readOnly} aria-label="Up" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Up', 'Up', 'up')}>↑</button>
+      <button class={flashClass('arrow-up')} disabled={readOnly} aria-label="Up — hold to repeat" onpointerdown={popupArrowDown('up')} oncontextmenu={(event) => event.preventDefault()} onpointerup={popupArrowEnd} onpointercancel={popupArrowEnd} onclick={(e) => e.preventDefault()}>↑</button>
       <span aria-hidden="true"></span>
-      <button class={flashClass('left')} disabled={readOnly} aria-label="Left" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Left', 'Left', 'left')}>←</button>
+      <button class={flashClass('arrow-left')} disabled={readOnly} aria-label="Left — hold to repeat" onpointerdown={popupArrowDown('left')} oncontextmenu={(event) => event.preventDefault()} onpointerup={popupArrowEnd} onpointercancel={popupArrowEnd} onclick={(e) => e.preventDefault()}>←</button>
       <span aria-hidden="true"></span>
-      <button class={flashClass('right')} disabled={readOnly} aria-label="Right" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Right', 'Right', 'right')}>→</button>
+      <button class={flashClass('arrow-right')} disabled={readOnly} aria-label="Right — hold to repeat" onpointerdown={popupArrowDown('right')} oncontextmenu={(event) => event.preventDefault()} onpointerup={popupArrowEnd} onpointercancel={popupArrowEnd} onclick={(e) => e.preventDefault()}>→</button>
       <span aria-hidden="true"></span>
-      <button class={flashClass('down')} disabled={readOnly} aria-label="Down" onpointerdown={(event) => event.preventDefault()} onclick={() => sendTerminalKey('Down', 'Down', 'down')}>↓</button>
+      <button class={flashClass('arrow-down')} disabled={readOnly} aria-label="Down — hold to repeat" onpointerdown={popupArrowDown('down')} oncontextmenu={(event) => event.preventDefault()} onpointerup={popupArrowEnd} onpointercancel={popupArrowEnd} onclick={(e) => e.preventDefault()}>↓</button>
       <span aria-hidden="true"></span>
     </div>
   {/if}
@@ -2344,7 +2471,7 @@
         </Button>
       </div>
       <div class="arrow-menu">
-        <Button variant="secondary" size="sm" aria-label="Arrow keys" aria-expanded={arrowsOpen} onclick={() => { arrowsOpen = !arrowsOpen; fkeysOpen = false; }}>
+        <Button variant="secondary" size="sm" class={arrowPadDir !== null ? 'arrow-pad-active' : ''} aria-label="Arrow keys — drag to press, hold to repeat" aria-expanded={arrowsOpen} onpointerdown={arrowPadDown} oncontextmenu={(event) => event.preventDefault()} onpointermove={arrowPadMove} onpointerup={arrowPadEnd} onpointercancel={arrowPadCancel} onclick={arrowPadClick}>
           {@render arrowIcon()}
         </Button>
       </div>
@@ -2754,7 +2881,11 @@
               size="sm"
               disabled={readOnly}
               aria-label={action.label}
-              onclick={() => { void sendKeys(action.keys, action.label); }}
+              data-keys={action.keys.join('+')}
+              onpointerdown={menuActionDown(action)} oncontextmenu={(event) => event.preventDefault()}
+              onpointerup={menuActionEnd}
+              onpointercancel={menuActionEnd}
+              onclick={(event) => event.preventDefault()}
             >{#if action.keys.length === 1 && action.keys[0] === 'Up'}{@render arrowUpIcon()}{:else if action.keys.length === 1 && action.keys[0] === 'Down'}{@render arrowDownIcon()}{:else if action.keys.length === 1 && action.keys[0] === 'Left'}{@render arrowLeftIcon()}{:else if action.keys.length === 1 && action.keys[0] === 'Right'}{@render arrowRightIcon()}{:else}<kbd>{menuKeyLabel(action.keys)}</kbd>{action.label}{/if}</Button>
           {/each}
         </div>
@@ -2845,10 +2976,14 @@
           variant="secondary"
           size="sm"
           disabled={readOnly}
-          aria-label="Arrow keys"
+          class={arrowPadDir !== null ? 'arrow-pad-active' : ''}
+          aria-label="Arrow keys — drag to press, hold to repeat"
           aria-expanded={arrowsOpen}
-          onpointerdown={(event) => event.preventDefault()}
-          onclick={() => { arrowsOpen = !arrowsOpen; fkeysOpen = false; ctrlChordMenuOpen = false; }}
+          onpointerdown={arrowPadDown} oncontextmenu={(event) => event.preventDefault()}
+          onpointermove={arrowPadMove}
+          onpointerup={arrowPadEnd}
+          onpointercancel={arrowPadCancel}
+          onclick={arrowPadClick}
         >
           {@render arrowIcon()}
         </Button>

@@ -79,6 +79,7 @@
   };
   (window as unknown as Record<string, unknown>).__scroller = () =>
     document.querySelector<HTMLElement>('.term-content');
+  (window as unknown as Record<string, unknown>).__storeForTest = relayStore;
 </script>
 
 <TerminalView {agent} allAgents={[agent]} {frame} {responding} />
