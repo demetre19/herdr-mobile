@@ -700,7 +700,12 @@ describe('activity, question drafts, and launch names', () => {
     expect(suggestedLaunchName(`/home/me/${'project'.repeat(12)}`, 'codex').length).toBeLessThanOrEqual(32);
     expect(suggestedLaunchName('/home/me/123.App', 'codex')).toBe('project-123-app-codex');
     expect(validAgentName('project-codex')).toBe(true);
-    expect(validAgentName('Project.codex')).toBe(false);
+    expect(validAgentName('THE BOSS')).toBe(true);
+    expect(validAgentName('Project.codex')).toBe(true);
+    expect(validAgentName('')).toBe(false);
+    expect(validAgentName('   ')).toBe(false);
+    expect(validAgentName('x'.repeat(65))).toBe(false);
+    expect(validAgentName('bad\nname')).toBe(false);
   });
 });
 

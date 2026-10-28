@@ -909,12 +909,15 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .upload-status { color: var(--success); font-size: .7rem; margin: -.2rem .75rem .45rem; }
 .quick-actions { border-top: 1px solid var(--border); padding: .55rem; }
 .quick-actions .button { flex: 1; }
-.term-keys { align-items: center; border-top: 1px solid var(--border); display: flex; gap: .3rem; justify-content: safe center; overflow-x: auto; overscroll-behavior-x: contain; padding: .28rem .55rem; scrollbar-width: none; }
+/* The row scrolls horizontally when keys overflow (Large mode, narrow
+   screens). Scroll shadows fade each edge only while more content hides on
+   that side — the fading Enter button is the cue the row scrolls. */
+.term-keys { align-items: center; background: linear-gradient(to right, var(--background) 30%, transparent), linear-gradient(to left, var(--background) 30%, transparent), radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / .28), transparent), radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / .28), transparent); background-attachment: local, local, scroll, scroll; background-repeat: no-repeat; background-size: 36px 100%, 36px 100%, 12px 100%, 12px 100%; border-top: 1px solid var(--border); display: flex; gap: .3rem; justify-content: safe center; overflow-x: auto; overscroll-behavior-x: contain; padding: .28rem .55rem; scrollbar-width: none; }
 .term-keys::-webkit-scrollbar { display: none; }
 .term-keys > * { flex: 0 0 auto; }
 /* Sleek ghost keys: lighter fill and tighter padding than .button-sm so the
    row reads as a control strip, not a button toolbar. */
-.term-keys .button { background: transparent; border-color: color-mix(in srgb, var(--control-border) 55%, transparent); border-radius: .45rem; font-size: .74rem; font-weight: 550; min-height: 1.7rem; padding: .16rem .5rem; }
+.term-keys .button { background: transparent; border-color: color-mix(in srgb, var(--control-border) 55%, transparent); border-radius: .45rem; font-size: .74rem; font-weight: 550; min-height: 1.7rem; padding: .16rem .5rem; touch-action: pan-x; }
 .term-keys .button:hover { background: color-mix(in srgb, var(--card) 75%, transparent); }
 .term-keys .spacer { flex: 1 0 auto; min-width: .5rem; }
 .key-feedback { background: color-mix(in srgb, var(--primary) 10%, var(--background)); border-top: 1px solid var(--border); color: var(--muted); font-size: .66rem; margin: 0; min-height: 1.55rem; padding: .35rem .65rem; }

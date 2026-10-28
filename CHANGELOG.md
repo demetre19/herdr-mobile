@@ -3,6 +3,24 @@
 Notable user-facing changes to Herdr Mobile Relay are documented here. The
 project follows [Semantic Versioning](https://semver.org/).
 
+
+## [1.0.31] - 2026-10-28 (fork: demetre19/herdr-mobile)
+
+### Fixed
+
+- Tab names accept any text: the relay enforced a slug regex
+  (`[a-z][a-z0-9_-]{0,31}`) that invented a constraint Herdr never had —
+  uppercase, spaces, and Unicode all rejected with "name must match" even
+  though names only ever become display labels passed via argv (no shell).
+  Validation is now non-empty, ≤64 characters, no control characters.
+
+### Changed
+
+- The terminal key row scrolls horizontally on phones too narrow to fit it
+  in large interface size: `touch-action: pan-x` on row buttons (the ↔ pad
+  keeps claiming all directions) plus a right-edge fade cue when content is
+  hidden.
+
 ## [1.0.30] - 2026-10-24 (fork: demetre19/herdr-mobile)
 
 ### Added

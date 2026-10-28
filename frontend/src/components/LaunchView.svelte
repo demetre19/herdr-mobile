@@ -336,7 +336,7 @@
       <p class="hint">The folder shown above is selected. Tap it to browse; use ↑ or Parent folder to go back.</p>
 
       <label for="launch-name">Name</label>
-      <input id="launch-name" bind:value={name} required maxlength="32" pattern={'[a-z][a-z0-9_-]{0,31}'} title="Start with a lowercase letter; use lowercase letters, numbers, underscores, or dashes." placeholder="project-codex" autocomplete="off" />
+      <input id="launch-name" bind:value={name} required maxlength="64" pattern={'[^\x00-\x1f\x7f]{1,64}'} title="Any name up to 64 characters; control characters are not allowed." placeholder="project-codex" autocomplete="off" />
 
       <label for="launch-prompt">Initial task <span class="optional">(optional)</span></label>
       <textarea id="launch-prompt" bind:value={prompt} maxlength="100000" placeholder="Describe the task to start…"></textarea>

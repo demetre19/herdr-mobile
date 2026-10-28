@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/0cv/herdr-mobile-relay/internal/herdr"
 	"github.com/0cv/herdr-mobile-relay/internal/profiles"
@@ -34,7 +34,23 @@ const (
 	agentStartRetryMax     = 1500 * time.Millisecond
 )
 
-var agentNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+// Agent names are display labels (tab label + pane name), not identifiers:
+// they reach Herdr via exec.Command argv, so no shell quoting applies and
+// spaces/Unicode are legal — live tabs are literally named "THE BOSS".
+// Reject only empty names, control characters, and unbounded length.
+const agentNameMaxRunes = 64
+
+func validAgentName(name string) bool {
+	if name == "" || len([]rune(name)) > agentNameMaxRunes {
+		return false
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
 
 type StartRequest struct {
 	ProfileID   string
@@ -67,9 +83,11 @@ func (l *Lifecycle) ValidateStart(request StartRequest) (profiles.Profile, Start
 	if !ok {
 		return profiles.Profile{}, request, errors.New("profile_id is not available")
 	}
-	if !agentNamePattern.MatchString(request.Name) {
-		return profiles.Profile{}, request, errors.New("name must match [a-z][a-z0-9_-]{0,31}")
+	trimmed := strings.TrimSpace(request.Name)
+	if !validAgentName(trimmed) {
+		return profiles.Profile{}, request, fmt.Errorf("name must be 1-%d characters with no control characters", agentNameMaxRunes)
 	}
+	request.Name = trimmed
 	if len([]rune(request.Prompt)) > promptMaxChars {
 		return profiles.Profile{}, request, errors.New("prompt exceeds maximum length")
 	}

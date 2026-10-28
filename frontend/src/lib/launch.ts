@@ -1,5 +1,9 @@
+// Agent names are display labels, not identifiers — the relay accepts any
+// trimmed label up to 64 runes without control characters ("THE BOSS" works).
 export function validAgentName(value: unknown): boolean {
-  return /^[a-z][a-z0-9_-]{0,31}$/.test(String(value || ''));
+  const s = String(value || '').trim();
+  if (!s || [...s].length > 64) return false;
+  return ![...s].some(c => c < ' ' || c === '');
 }
 
 export function launchNamePart(value: unknown, fallback: string): string {
