@@ -233,3 +233,46 @@ func TestAgentStartFailureSurfacesTheKeptPane(t *testing.T) {
 		t.Fatal("topology was not published, so the phone never sees the pane that survived")
 	}
 }
+
+func TestValidateStartAcceptsFreeFormNames(t *testing.T) {
+	dir := t.TempDir()
+	lifecycle, cwd := busyLifecycle(t, dir, busyHerdr(t, dir, filepath.Join(dir, "invocations.log"), 0))
+
+	cases := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "uppercase and spaces", input: "THE BOSS", want: "THE BOSS"},
+		{name: "punctuation and digits", input: "Project.codex v2!", want: "Project.codex v2!"},
+		{name: "unicode", input: "Café — Haupt", want: "Café — Haupt"},
+		{name: "trims surrounding space", input: "  boss  ", want: "boss"},
+		{name: "max length", input: strings.Repeat("x", agentNameMaxRunes), want: strings.Repeat("x", agentNameMaxRunes)},
+		{name: "empty", input: "", wantErr: true},
+		{name: "blank", input: "   ", wantErr: true},
+		{name: "over length", input: strings.Repeat("x", agentNameMaxRunes+1), wantErr: true},
+		{name: "control character", input: "bad\nname", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, request, err := lifecycle.ValidateStart(StartRequest{
+				ProfileID: "codex",
+				Name:      tc.input,
+				Cwd:       cwd,
+			})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for name %q", tc.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for name %q: %v", tc.input, err)
+			}
+			if request.Name != tc.want {
+				t.Fatalf("name %q: got %q, want %q", tc.input, request.Name, tc.want)
+			}
+		})
+	}
+}
