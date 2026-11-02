@@ -86,3 +86,23 @@
   session dies quietly, while the tab record settles. Verified live
   2026-10-22 (Herdr `api snapshot` showed L25/L28/L32 idle while the phone
   showed them green — the pane snapshot was stale, the tab was truth).
+
+## Herdr App ("hc") lane (v1.0.32)
+
+- `internal/hc` watches the new Herdr app: `herdr-app ls` (window topology)
+  merged with `herdr-core`/`hc ls --all --json`; un-windowed terminals get
+  synthetic `hc-core:<address>` spaces that MUST be appended to
+  `snap.Spaces` — the phone renders core terminals from spaces, not agents.
+- hc pane ids are `hc:<address>`; `server.go` intercepts them before the
+  action switch and `dispatchHcCommand` (`internal/app/hc.go`) routes
+  reads/watches/sends/keys through the hc CLI. hc panes carry
+  `server_session_id=primary` + `generation=1` for target validation.
+- The snapshot rides `push_config.hc` (never a standalone handshake
+  message — handshake reads are positionally pinned by tests) plus
+  `hc_inventory` broadcasts on change.
+- hc pane watches skip `HandleProbePane` (no hc counterpart — it errors
+  every tick and freezes the watch); `pollHcPaneWatch` reads each tick
+  and `paneWatchUpdate` dedupes.
+- Federation: `hc ls machines[]` rides the inventory so the frontend can
+  fold `<machine>/<suffix>` mirror aliases onto the owning relay's cards.
+  `applyHcInventory` must copy every new message field it adds.
