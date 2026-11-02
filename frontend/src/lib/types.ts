@@ -652,6 +652,9 @@ export interface HcInventory {
   state: 'ready' | 'error' | string;
   message?: string;
   server_id?: string;
+  /** Remote federation machine names; qualified machine/addr terminals mirror
+      an owning machine's bare terminal and fold onto its relay section. */
+  machines?: string[];
   spaces: HcSpace[];
   agents: Agent[];
   last_attempt_at?: number;

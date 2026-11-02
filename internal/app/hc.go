@@ -44,6 +44,7 @@ func hcInventoryMessage(snap hc.Snapshot) map[string]any {
 		"state":           state,
 		"message":         snap.Message,
 		"server_id":       snap.ServerID,
+		"machines":        snap.Machines,
 		"spaces":          spaces,
 		"agents":          agents,
 		"last_attempt_at": snap.LastAttempt,

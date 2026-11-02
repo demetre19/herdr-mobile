@@ -33,11 +33,12 @@ func snapshotFingerprint(s Snapshot) string {
 		Available bool       `json:"a"`
 		Message   string     `json:"m"`
 		ServerID  string     `json:"s"`
+		Machines  []string   `json:"mc"`
 		Spaces    []Space    `json:"sp"`
 		Agents    []agentKey `json:"ag"`
 	}{
 		Available: s.Available, Message: s.Message, ServerID: s.ServerID,
-		Spaces: s.Spaces, Agents: agents,
+		Machines: s.Machines, Spaces: s.Spaces, Agents: agents,
 	})
 	if err != nil {
 		return ""

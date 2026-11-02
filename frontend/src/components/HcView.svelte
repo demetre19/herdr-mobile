@@ -34,6 +34,68 @@
     return out;
   });
 
+
+  // Federation aliases: each daemon mirrors remote machines' terminals as
+  // "<machine>/<suffix>" next to its own bare "<suffix>" terminals. When both
+  // machines' relays are paired, a qualified card that the owning relay also
+  // publishes bare would render the same physical terminal twice — hide the
+  // alias and let the owner's card carry it.
+  const hiddenPaneIds = $derived.by(() => {
+    const bareByRelay = new Map<string, Set<string>>();
+    for (const [relayId, inv] of $hcInventories) {
+      const bare = new Set<string>();
+      for (const agent of inv.agents || []) {
+        const id = agent.terminal_id || '';
+        if (id && !id.includes('/')) bare.add(id);
+      }
+      bareByRelay.set(relayId, bare);
+    }
+    // A relay's federation name is the qualified prefix that this relay's
+    // machines[] names and that collides with its bare suffixes.
+    const fedName = new Map<string, string>();
+    for (const [relayId, inv] of $hcInventories) {
+      const machines = new Set(inv.machines || []);
+      for (const agent of inv.agents || []) {
+        const id = agent.terminal_id || '';
+        const slash = id.indexOf('/');
+        if (slash < 1 || !machines.has(id.slice(0, slash))) continue;
+        const suffix = id.slice(slash + 1);
+        for (const [other, bare] of bareByRelay) {
+          if (other !== relayId && bare.has(suffix) && !fedName.has(other)) {
+            fedName.set(other, id.slice(0, slash));
+          }
+        }
+      }
+    }
+    const hidden = new Set<string>();
+    const seenQualified = new Set<string>();
+    for (const [relayId, inv] of $hcInventories) {
+      for (const agent of inv.agents || []) {
+        const id = agent.terminal_id || '';
+        const slash = id.indexOf('/');
+        if (slash < 1) continue;
+        const machine = id.slice(0, slash);
+        const suffix = id.slice(slash + 1);
+        const key = `${machine}/${suffix}`;
+        let hide = seenQualified.has(key);
+        if (!hide) {
+          for (const [other, bare] of bareByRelay) {
+            if (other !== relayId && bare.has(suffix) && fedName.get(other) === machine) {
+              hide = true;
+              break;
+            }
+          }
+        }
+        if (hide) hidden.add(`${relayId}:${agent.pane_id}`);
+        else seenQualified.add(key);
+      }
+    }
+    return hidden;
+  });
+
+  function visible(agent: Agent, relayId: string): boolean {
+    return !hiddenPaneIds.has(`${relayId}:${agent.pane_id}`);
+  }
   // Terminal cards are indexed by the addresses the space topology references.
   function agentsByAddress(agents: Agent[] | undefined): Map<string, Agent> {
     const map = new Map<string, Agent>();
@@ -44,12 +106,12 @@
   }
 
   // Space rows pair each tab with its synthesized agent record.
-  function spaceRows(space: HcSpace, byAddress: Map<string, Agent>): { tab: HcTab; agent: Agent }[] {
+  function spaceRows(space: HcSpace, byAddress: Map<string, Agent>, relayId: string): { tab: HcTab; agent: Agent }[] {
     const rows: { tab: HcTab; agent: Agent }[] = [];
     for (const tab of space.tabs || []) {
       for (const term of tab.terminals || []) {
         const agent = byAddress.get(term.terminal);
-        if (agent) rows.push({ tab, agent });
+        if (agent && visible(agent, relayId)) rows.push({ tab, agent });
       }
     }
     return rows;
@@ -63,6 +125,17 @@
 
   function coreAddress(space: HcSpace): string {
     return space.id.slice('hc-core:'.length);
+  }
+
+  // Visible core-terminal agents for a section (federation aliases removed).
+  function coreAgentsFor(inventory: HcInventory, byAddress: Map<string, Agent>, relayId: string): Agent[] {
+    const agents: Agent[] = [];
+    for (const space of inventory.spaces || []) {
+      if (!isCoreSpace(space)) continue;
+      const agent = byAddress.get(coreAddress(space));
+      if (agent && visible(agent, relayId)) agents.push(agent);
+    }
+    return agents;
   }
 </script>
 
@@ -88,10 +161,10 @@
         {#if section.inventory.state !== 'error'}
           {@const byAddress = agentsByAddress(section.inventory.agents)}
           {@const windowSpaces = (section.inventory.spaces || []).filter((s) => !isCoreSpace(s))}
-          {@const coreSpaces = (section.inventory.spaces || []).filter(isCoreSpace)}
+          {@const coreAgents = coreAgentsFor(section.inventory, byAddress, section.relayId)}
           <div class="workspace-grid">
             {#each windowSpaces as space (space.id)}
-              {@const rows = spaceRows(space, byAddress)}
+              {@const rows = spaceRows(space, byAddress, section.relayId)}
               {#if rows.length > 0}
                 <details class="workspace-card" open>
                   <summary>
@@ -129,17 +202,14 @@
               {/if}
             {/each}
 
-            {#if coreSpaces.length > 0}
+            {#if coreAgents.length > 0}
               <details class="workspace-card" open>
                 <summary>
                   <span class="agent-project">Core terminals</span>
-                  <span class="agent-count">{coreSpaces.length}</span>
+                  <span class="agent-count">{coreAgents.length}</span>
                 </summary>
                 <div class="agent-grid">
-                  {#each coreSpaces as space (space.id)}
-                    {@const address = coreAddress(space)}
-                    {@const agent = byAddress.get(address)}
-                    {#if agent}
+                  {#each coreAgents as agent (agent.pane_id)}
                       {@const tone = agentStatusTone(agent)}
                       {@const group = agentStatusGroup(agent)}
                       <article class="agent-card" class:card-live={tone === 'success'}>
@@ -163,7 +233,6 @@
                           </span>
                         </button>
                       </article>
-                    {/if}
                   {/each}
                 </div>
               </details>

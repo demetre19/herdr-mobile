@@ -162,18 +162,31 @@ func (c *Client) ServerID(ctx context.Context) (string, error) {
 // Terminals lists live + finished terminals from the core daemon. It covers
 // machines/terminals the window does not show, so the watcher merges it under
 // the app topology.
-func (c *Client) Terminals(ctx context.Context) ([]CoreTerminal, error) {
+// Terminals lists live + finished terminals plus the federation's remote
+// machine names (a relay publishes remote terminals under machine/address
+// aliases, so the phone needs the names to fold those aliases onto the
+// owning relay's section).
+func (c *Client) Terminals(ctx context.Context) ([]CoreTerminal, []string, error) {
 	out, err := c.run(ctx, c.CoreBin, "ls", "--all", "--json")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var payload struct {
+		Machines  []struct {
+			Name string `json:"name"`
+		} `json:"machines"`
 		Terminals []CoreTerminal `json:"terminals"`
 	}
 	if err := json.Unmarshal(out, &payload); err != nil {
-		return nil, fmt.Errorf("hc ls: %w", err)
+		return nil, nil, fmt.Errorf("hc ls: %w", err)
 	}
-	return payload.Terminals, nil
+	names := make([]string, 0, len(payload.Machines))
+	for _, machine := range payload.Machines {
+		if machine.Name != "" {
+			names = append(names, machine.Name)
+		}
+	}
+	return payload.Terminals, names, nil
 }
 
 // Read returns the terminal screen plus `lines` of scrollback, ANSI stripped

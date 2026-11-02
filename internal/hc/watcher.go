@@ -18,6 +18,10 @@ type Snapshot struct {
 	Available   bool
 	Message     string
 	ServerID    string
+	// Machines lists the federation's remote machine names; qualified
+	// <machine>/<addr> terminals mirror an owning machine's bare terminal, so
+	// the phone needs them to fold duplicates when both machines are paired.
+	Machines    []string
 	Spaces      []Space
 	Agents      []*coordinator.AgentState
 	LastSuccess int64
@@ -100,7 +104,7 @@ func (w *Watcher) poll(ctx context.Context) {
 
 	serverID, serverErr := w.client.ServerID(ctx)
 	spaces, topoErr := w.client.Topology(ctx)
-	terminals, termErr := w.client.Terminals(ctx)
+	terminals, machines, termErr := w.client.Terminals(ctx)
 
 	if serverErr != nil && termErr != nil {
 		snap.Available = false
@@ -113,6 +117,7 @@ func (w *Watcher) poll(ctx context.Context) {
 	if topoErr != nil {
 		snap.Message = "Herdr App window is closed; showing core terminals"
 	}
+	snap.Machines = machines
 	snap.Spaces = spaces
 	snap.LastSuccess = now
 
