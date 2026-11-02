@@ -137,21 +137,26 @@ func (w *Watcher) poll(ctx context.Context) {
 			}
 		}
 	}
-	// Terminals the window does not expose (unlabeled hc workers, machines the
-	// window hasn't mounted) still get a card under a synthetic space.
-	for i := range terminals {
-		t := &terminals[i]
-		if seen[t.Address] {
-			continue
+	// The app view mirrors what the window mounts — detached core workers
+	// (hc's own add-* jobs, finished shells) must NOT appear alongside real
+	// spaces; hc ls still lists them as "live" long after their work ended.
+	// `hc ls` remains the fallback ONLY for a closed/unreachable window, and
+	// even then finished terminals are noise, not content.
+	if topoErr != nil {
+		for i := range terminals {
+			t := &terminals[i]
+			if seen[t.Address] || t.State != "live" {
+				continue
+			}
+			space := Space{ID: "hc-core:" + t.Address, Name: "Core terminals", Tabs: []Tab{{
+				ID: "hc-core:" + t.Address, Name: t.Name,
+			}}}
+			// The phone renders core terminals from spaces; the synthetic
+			// space must ride the snapshot, not just the agent record.
+			snap.Spaces = append(snap.Spaces, space)
+			term := Terminal{Address: t.Address}
+			agents = append(agents, agentRecord(w.hostname, serverID, space, space.Tabs[0], term, t))
 		}
-		space := Space{ID: "hc-core:" + t.Address, Name: "Core terminals", Tabs: []Tab{{
-			ID: "hc-core:" + t.Address, Name: t.Name,
-		}}}
-		// The phone renders core terminals from spaces; the synthetic space
-		// must ride the snapshot, not just the agent record.
-		snap.Spaces = append(snap.Spaces, space)
-		term := Terminal{Address: t.Address}
-		agents = append(agents, agentRecord(w.hostname, serverID, space, space.Tabs[0], term, t))
 	}
 	// The window reports status; the compact `hc ls` record does not. Fetch
 	// full records (bounded) so un-windowed and still-live terminals get a
