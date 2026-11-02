@@ -198,3 +198,48 @@ func TestSnapshotFingerprintDetectsVisibleChanges(t *testing.T) {
 		t.Fatal("availability flip did not move fingerprint")
 	}
 }
+
+func TestLocalSpaceIDPinsThisMachine(t *testing.T) {
+	remote := "macbookpro-codex"
+	local := Space{ID: "sp1", Name: "~"}
+	remoteSpace := Space{ID: "sp2", Name: "prd", Machine: &remote}
+	if got := LocalSpaceID([]Space{remoteSpace, local}); got != "sp1" {
+		t.Fatalf("local space = %q, want sp1", got)
+	}
+	if got := LocalSpaceID([]Space{remoteSpace}); got != "" {
+		t.Fatalf("remote-only topology = %q, want empty (space.new path)", got)
+	}
+	if got := LocalSpaceID(nil); got != "" {
+		t.Fatalf("empty topology = %q", got)
+	}
+}
+
+func TestTabNewPinsSpaceAndRunsDo(t *testing.T) {
+	// A recorder binary: captures argv, answers {"ok":true}.
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "herdr-app")
+	rec := filepath.Join(dir, "args.txt")
+	script := "#!/bin/sh\nprintf '%s\n' \"$@\" > '" + rec + "'\necho '{\"ok\":true}'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClient(bin, bin)
+	if err := c.TabNew(context.Background(), "sp1", "tab", "/tmp/x", []string{"zsh"}, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(rec)
+	want := "do\ntab.new\n--space\nsp1\n--name\ntab\n--folder\n/tmp/x\n--argv\n[\"zsh\"]\n--task\nhi\n"
+	if string(got) != want {
+		t.Fatalf("args:\n%s\nwant:\n%s", got, want)
+	}
+
+	// No local space → space.new with --tab instead of --name.
+	if err := c.TabNew(context.Background(), "", "tab", "/tmp/x", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = os.ReadFile(rec)
+	want = "do\nspace.new\n--tab\ntab\n--folder\n/tmp/x\n"
+	if string(got) != want {
+		t.Fatalf("space.new args:\n%s\nwant:\n%s", got, want)
+	}
+}
