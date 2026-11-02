@@ -147,6 +147,9 @@ func (w *Watcher) poll(ctx context.Context) {
 		space := Space{ID: "hc-core:" + t.Address, Name: "Core terminals", Tabs: []Tab{{
 			ID: "hc-core:" + t.Address, Name: t.Name,
 		}}}
+		// The phone renders core terminals from spaces; the synthetic space
+		// must ride the snapshot, not just the agent record.
+		snap.Spaces = append(snap.Spaces, space)
 		term := Terminal{Address: t.Address}
 		agents = append(agents, agentRecord(w.hostname, serverID, space, space.Tabs[0], term, t))
 	}
