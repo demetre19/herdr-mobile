@@ -520,6 +520,7 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .agent-chip { border-radius: .3rem; font-size: .62rem; font-weight: 700; letter-spacing: .02em; line-height: 1; padding: .18rem .4rem; text-transform: uppercase; }
 .agent-chip-role { background: color-mix(in srgb, #ff8a4c 16%, transparent); color: #ffb27d; }
 .agent-chip-model { background: color-mix(in srgb, #5ec6e8 14%, transparent); color: #8fdcf7; }
+.agent-chip-effort { background: color-mix(in srgb, #b78af2 14%, transparent); color: #c9a8f7; }
 .compact-agent-grid { gap: .28rem; }
 .compact-agent-card { background: color-mix(in srgb, var(--card) 78%, transparent); border-radius: .58rem; }
 /* The absolutely-positioned pin needs a reserved lane, not a nudge: with full

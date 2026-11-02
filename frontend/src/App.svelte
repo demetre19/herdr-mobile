@@ -295,7 +295,7 @@
   });
 
   $effect(() => {
-    const blocked = $agents.filter((agent) => agentNeedsResponse(agent) || agentNeedsInspection(agent));
+    const blocked = [...$agents, ...$hcAgents].filter((agent) => agentNeedsResponse(agent) || agentNeedsInspection(agent));
     document.title = blocked.length ? `(${blocked.length}) 🐑 herdr` : '🐑 herdr';
     if (blocked.length && navigator.setAppBadge) void navigator.setAppBadge(blocked.length).catch(() => {});
     else if (navigator.clearAppBadge) void navigator.clearAppBadge().catch(() => {});
@@ -316,7 +316,7 @@
   $effect(() => {
     if ($currentView.view !== 'notification') { clearNotificationFallback(); return; }
     const target = $currentView.target;
-    const agent = resolveNotificationTarget(target, $agents);
+    const agent = resolveNotificationTarget(target, [...$agents, ...$hcAgents]);
     // Legacy notifications never carry an immutable backend-verifiable action
     // reference. Open their current thread read-only; never execute the action.
     if (target.action) {
@@ -892,7 +892,7 @@
 
 <UpdateProgressDialog {readOnlyRelayIds} />
 <ManageDialog bind:open={manageOpen} agent={activeAgent} readOnly={activeReadOnly} />
-<GlobalJump bind:open={jumpOpen} agents={$agents} onselect={openAgent} />
+<GlobalJump bind:open={jumpOpen} agents={[...$agents, ...$hcAgents]} onselect={openAgent} />
 <WorkspaceInspector bind:open={workspaceOpen} agent={activeAgent} />
 <LockScreen />
 <Toast />

@@ -13,6 +13,7 @@ import (
 	"github.com/0cv/herdr-mobile-relay/internal/history"
 	"github.com/0cv/herdr-mobile-relay/internal/protocol"
 	"github.com/0cv/herdr-mobile-relay/internal/question"
+	"github.com/0cv/herdr-mobile-relay/internal/push"
 	"github.com/0cv/herdr-mobile-relay/internal/slashcmd"
 	"github.com/0cv/herdr-mobile-relay/internal/transport"
 	"github.com/0cv/herdr-mobile-relay/internal/workspace"
@@ -80,7 +81,57 @@ func (s *Server) publishHcInventory() {
 	if s.hcW == nil {
 		return
 	}
-	s.hub.Broadcast(hcInventoryMessage(s.hcW.Current()))
+	snap := s.hcW.Current()
+	s.publishHcTransitions(snap)
+	s.hub.Broadcast(hcInventoryMessage(snap))
+}
+
+// publishHcTransitions diffs hc agent statuses across snapshots and pushes the
+// same attention/finished notifications legacy panes get via SetOnTransition —
+// hc agents never enter s.state, so without this their transitions are silent.
+func (s *Server) publishHcTransitions(snap hc.Snapshot) {
+	s.hcStatusMu.Lock()
+	prev := s.hcPrevStatus
+	next := make(map[string]string, len(snap.Agents))
+	changed := make([]*coordinator.AgentState, 0)
+	for _, agent := range snap.Agents {
+		if agent == nil || agent.PaneID == "" {
+			continue
+		}
+		next[agent.PaneID] = agent.Status
+		if old, ok := prev[agent.PaneID]; ok && old != agent.Status {
+			changed = append(changed, agent)
+		}
+	}
+	s.hcPrevStatus = next
+	s.hcStatusMu.Unlock()
+	if s.pushM == nil || len(prev) == 0 {
+		return // no baseline or no push manager — first snapshot never notifies
+	}
+	ctx := context.Background()
+	for _, agent := range changed {
+		switch agent.Status {
+		case "blocked":
+			category := push.CategoryAttention
+			preview := push.PreviewHidden
+			if agent.AttentionKind == question.AttentionQuestion {
+				category = push.CategoryQuestion
+				preview = push.PreviewQuestion
+			}
+			s.publishAgentPush(ctx, agent,
+				fmt.Sprintf("hc-attn-%d", time.Now().UnixNano()), 0, category, preview)
+		default:
+			if agent.Status == "done" || agent.Status == "finished" {
+				s.publishAgentPush(ctx, agent,
+					fmt.Sprintf("hc-finished-%d", time.Now().UnixNano()), 0,
+					push.CategoryFinished, push.PreviewBrief)
+			}
+			// Leaving blocked → retract the outstanding attention push.
+			if err := s.pushM.ResolvePaneID(ctx, agent.PaneID, ""); err != nil {
+				s.logger.Warn("hc push retraction failed", "pane_id", agent.PaneID, "error", err)
+			}
+		}
+	}
 }
 
 // validateHcPaneTarget mirrors validateExactPaneTarget for the hc lane: the
@@ -475,6 +526,25 @@ func (s *Server) dispatchHcCommand(ctx context.Context, client *transport.Client
 			return
 		}
 		if err := s.hcC.TabRename(ctx, agent.TabID, name); err != nil {
+			fail(hcSendError(err))
+			return
+		}
+		s.sendCommandResult(client, inbound.RequestID, action, true, "completed", "", inbound.PaneID, nil)
+	case "workspace_close":
+		// Closing an hc space == `herdr-app do space.close --confirmed`
+		// (the phone's dialog already confirms; skip the window's own ask).
+		// Core-terminal groups have no space object to close — they hold
+		// only unmounted terminals, which are closed individually.
+		agent, ok := s.hcAgent(inbound.PaneID)
+		if !ok {
+			fail("That space no longer exists")
+			return
+		}
+		if agent.WorkspaceID == "" || strings.HasPrefix(agent.WorkspaceID, "hc-core:") {
+			fail("Core terminals are stopped individually")
+			return
+		}
+		if err := s.hcC.Do(ctx, "space.close", "--id", agent.WorkspaceID, "--confirmed"); err != nil {
 			fail(hcSendError(err))
 			return
 		}

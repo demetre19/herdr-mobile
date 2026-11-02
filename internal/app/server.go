@@ -119,6 +119,8 @@ type Server struct {
 	hcW              *hc.Watcher
 	hcStyledMu       sync.Mutex
 	hcStyledCache    map[string]hcStyledFrame
+	hcStatusMu       sync.Mutex
+	hcPrevStatus     map[string]string
 	updateM          *relayupdate.Manager
 	appDeployM       *appdeploy.Manager
 	hybrid           *hybridTransport

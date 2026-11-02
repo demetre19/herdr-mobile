@@ -893,10 +893,11 @@
                 <span class="agent-project">{displayName(agent)} <span class="host-badge">@{hostLabel(agent)}</span></span>
               {/if}
             </span>
-            {#if compact && (agent.agent_role || agent.agent_model)}
-              <span class="agent-chips" aria-label={`${agent.agent_role || ''} ${agent.agent_model || ''}`.trim()}>
+            {#if compact && (agent.agent_role || agent.agent_model || agent.agent_effort)}
+              <span class="agent-chips" aria-label={`${agent.agent_role || ''} ${agent.agent_model || ''} ${agent.agent_effort || ''}`.trim()}>
                 {#if agent.agent_role}<span class="agent-chip agent-chip-role">{agent.agent_role}</span>{/if}
-                {#if agent.agent_model}<span class="agent-chip agent-chip-model">{shortModelLabel(agent.agent_model)}{#if agent.agent_effort} · {agent.agent_effort}{/if}</span>{/if}
+                {#if agent.agent_model}<span class="agent-chip agent-chip-model">{shortModelLabel(agent.agent_model)}</span>{/if}
+                {#if agent.agent_effort}<span class="agent-chip agent-chip-effort">{agent.agent_effort}</span>{/if}
               </span>
             {/if}
             {#if !compact && meta}<span class="agent-meta">{meta}</span>{/if}

@@ -1696,7 +1696,7 @@ class RelayStore {
     this.agents.set(this.agentsValue);
     prunePaneAgentViewOverrides(this.agentsValue);
     prunePinnedWorkspaces(this.agentsValue, this.workspacesValue);
-    prunePinnedConversations(this.agentsValue);
+    prunePinnedConversations([...this.agentsValue, ...this.hcAgentsValue]);
   }
   private mergePaneInteraction(paneId: string, message: Record<string, any>): void {
     const index = this.agentsValue.findIndex((agent) => agent.pane_id === paneId);
@@ -1735,6 +1735,7 @@ class RelayStore {
       last_success_at: typeof message.last_success_at === 'number' ? message.last_success_at : 0,
     });
     this.hcInventories.set(new Map(this.hcInventoriesValue));
+    prunePinnedConversations([...this.agentsValue, ...this.hcAgentsValue]);
   }
 
   private removeAgentsForRelay(relayId: string): void {

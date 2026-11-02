@@ -211,16 +211,18 @@
   }
 
   // Hold-to-close: a long press on a card offers agent_stop (hc kill) with a
-  // confirm, mirroring the legacy list's hold gesture.
+  // confirm, mirroring the legacy list's hold gesture. Holding a space
+  // summary offers workspace_close (`herdr-app do space.close`), the same
+  // gesture legacy workspaces use.
   const CLOSE_PRESS_MS = 550;
   const CLOSE_SLOP_PX = 12;
+  type CloseTarget = { agent: Agent; kind: 'agent' | 'space'; label?: string };
   let closeDialogOpen = $state(false);
-  let closeTarget = $state<Agent | null>(null);
+  let closeTarget = $state<CloseTarget | null>(null);
   let closeBusy = $state(false);
   let suppressOpen = $state(false);
-
-  function closePress(node: HTMLElement, agent: Agent) {
-    let current = agent;
+  function closePress(node: HTMLElement, target: CloseTarget) {
+    let current = target;
     let timer = 0;
     let pointerId = -1;
     let startX = 0;
@@ -263,7 +265,7 @@
     node.addEventListener('pointercancel', onPointerEnd);
     node.addEventListener('click', onClick, true);
     return {
-      update(next: Agent) { current = next; },
+      update(next: CloseTarget) { current = next; },
       destroy() {
         node.removeEventListener('pointerdown', onPointerDown);
         node.removeEventListener('pointermove', onPointerMove);
@@ -280,8 +282,13 @@
     if (!target || closeBusy) return;
     closeBusy = true;
     try {
-      await relayStore.sendToAgent(target, { type: 'agent_stop' });
-      relayStore.showToast(`Stopped ${displayName(target)}.`);
+      if (target.kind === 'space') {
+        await relayStore.sendToAgent(target.agent, { type: 'workspace_close' });
+        relayStore.showToast(`Closed ${target.label || 'space'}.`);
+      } else {
+        await relayStore.sendToAgent(target.agent, { type: 'agent_stop' });
+        relayStore.showToast(`Stopped ${displayName(target.agent)}.`);
+      }
       closeDialogOpen = false;
       closeTarget = null;
     } catch (error) {
@@ -319,7 +326,7 @@
       aria-label={`Open ${label || tabName(agent) || displayName(agent)} on ${relayId}`}
       disabled={!inventoryReady}
       title={!inventoryReady ? 'This terminal is unavailable until the relay recovers.' : 'Hold to stop this terminal.'}
-      use:closePress={agent}
+      use:closePress={{ agent, kind: 'agent' }}
       onclick={() => { if (!suppressOpen) onopen(agent); }}
     >
       <span class="agent-identity">
@@ -336,10 +343,11 @@
             <span class="agent-path">{@render folderIcon()}<span>{#if wt >= 0}{agentPath.slice(0, wt)}<strong class="agent-path-tail">{agentPath.slice(wt)}</strong>{:else}{agentPath}{/if}</span></span>
           {/if}
         </span>
-        {#if agent.agent_role || agent.agent_model}
-          <span class="agent-chips" aria-label={`${agent.agent_role || ''} ${agent.agent_model || ''}`.trim()}>
+        {#if agent.agent_role || agent.agent_model || agent.agent_effort}
+          <span class="agent-chips" aria-label={`${agent.agent_role || ''} ${agent.agent_model || ''} ${agent.agent_effort || ''}`.trim()}>
             {#if agent.agent_role}<span class="agent-chip agent-chip-role">{agent.agent_role}</span>{/if}
-            {#if agent.agent_model}<span class="agent-chip agent-chip-model">{shortModelLabel(agent.agent_model)}{#if agent.agent_effort} · {agent.agent_effort}{/if}</span>{/if}
+            {#if agent.agent_model}<span class="agent-chip agent-chip-model">{shortModelLabel(agent.agent_model)}</span>{/if}
+            {#if agent.agent_effort}<span class="agent-chip agent-chip-effort">{agent.agent_effort}</span>{/if}
           </span>
         {/if}
         {#if blocked || needsInspection}
@@ -424,12 +432,15 @@
               {#if rows.length > 0}
                 {@const dKey = `hc:${section.relayId}:${space.id}`}
                 <details class="workspace-card" open={disclosureOpen(dKey)} ontoggle={(event) => rememberDisclosure(dKey, event)}>
-                  <summary>
+                  <summary
+                    title="Hold to close this space."
+                    use:closePress={{ agent: rows[0].agent, kind: 'space', label: space.name || 'Space' }}
+                  >
                     <span class="agent-project">{space.name || 'Space'}</span>
                     {#if space.machine}<span class="agent-count">{space.machine}</span>{/if}
                   </summary>
                   <div class="agent-grid compact-agent-grid">
-                    {#each rows as row (row.agent.pane_id)}
+                    {#each rows.filter((row) => !pinned.has(row.agent.pane_id)) as row (row.agent.pane_id)}
                       {@render hcCard(row.agent, section.relayId, row.tab.name || null, false)}
                     {/each}
                   </div>
@@ -445,7 +456,7 @@
                   <span class="agent-count">{coreAgents.length}</span>
                 </summary>
                 <div class="agent-grid compact-agent-grid">
-                  {#each coreAgents as agent (agent.pane_id)}
+                  {#each coreAgents.filter((a) => !pinned.has(a.pane_id)) as agent (agent.pane_id)}
                     {@render hcCard(agent, section.relayId, agent.name || null, true)}
                   {/each}
                 </div>
@@ -463,12 +474,16 @@
 <AppDialog
   id="hc-view-close"
   bind:open={closeDialogOpen}
-  title={`Stop ${closeTarget ? (tabName(closeTarget) || displayName(closeTarget)) : 'terminal'}?`}
-  description="Ends the program running in this terminal."
+  title={closeTarget?.kind === 'space'
+    ? `Close ${closeTarget.label || 'space'}?`
+    : `Stop ${closeTarget ? (tabName(closeTarget.agent) || displayName(closeTarget.agent)) : 'terminal'}?`}
+  description={closeTarget?.kind === 'space'
+    ? 'Closes the space and ends every terminal inside it.'
+    : 'Ends the program running in this terminal.'}
 >
   <div class="dialog-actions">
     <Button variant="secondary" disabled={closeBusy} onclick={() => { closeDialogOpen = false; }}>Cancel</Button>
-    <Button variant="danger" disabled={closeBusy} onclick={confirmClose}>{closeBusy ? 'Stopping…' : 'Stop'}</Button>
+    <Button variant="danger" disabled={closeBusy} onclick={confirmClose}>{closeBusy ? (closeTarget?.kind === 'space' ? 'Closing…' : 'Stopping…') : (closeTarget?.kind === 'space' ? 'Close' : 'Stop')}</Button>
   </div>
 </AppDialog>
 
