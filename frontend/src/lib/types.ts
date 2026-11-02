@@ -619,3 +619,41 @@ export interface QuestionDraft {
   otherSelected: boolean;
   otherText: string;
 }
+
+/** Herdr App (herdr-app/hc) topology — a space like a legacy workspace, a tab
+ * like a legacy tab, and a terminal as the pane-level record. */
+export interface HcTerminal {
+  terminal: string;
+  pane?: string;
+  status?: string | null;
+  app?: string | null;
+  name?: string | null;
+  sub_agents?: string[];
+}
+
+export interface HcTab {
+  id: string;
+  name?: string;
+  active?: boolean;
+  settled?: boolean;
+  terminals: HcTerminal[];
+}
+
+export interface HcSpace {
+  id: string;
+  name?: string;
+  folder?: string;
+  machine?: string | null;
+  active?: boolean;
+  tabs: HcTab[];
+}
+
+export interface HcInventory {
+  state: 'ready' | 'error' | string;
+  message?: string;
+  server_id?: string;
+  spaces: HcSpace[];
+  agents: Agent[];
+  last_attempt_at?: number;
+  last_success_at?: number;
+}

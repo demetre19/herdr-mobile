@@ -353,6 +353,12 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .app-header nav .button-icon { height: 2.45rem; min-height: 2.45rem; width: 2.45rem; }
 .nav-button-shell { display: inline-flex; position: relative; }
 .nav-update-badge { background: var(--warning); border: 2px solid var(--background); border-radius: 50%; height: .62rem; pointer-events: none; position: absolute; right: .16rem; top: .16rem; width: .62rem; }
+/* Legacy/App list-source toggle: a slim segmented pair that only renders when
+   a connected relay advertises hc_view. */
+.view-toggle { align-items: center; border: 1px solid var(--border); border-radius: .6rem; display: inline-flex; overflow: hidden; }
+.view-toggle .view-toggle-button { border-radius: 0; color: var(--muted); font-size: .85rem; height: 2.1rem; min-height: 2.1rem; width: 2.35rem; }
+.view-toggle .view-toggle-button + .view-toggle-button { border-inline-start: 1px solid var(--border); }
+.view-toggle .view-toggle-button[data-active="true"] { background: var(--card); color: var(--foreground); }
 .app-header.home-header > .status-dot { margin-inline-start: 1rem; }
 .header-title { display: flex; flex: 1; flex-direction: row; align-items: baseline; justify-content: space-between; gap: .45rem; min-width: 0; }
 .header-brand { align-items: center; display: flex; gap: .45rem; min-width: 0; }

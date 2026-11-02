@@ -1,0 +1,235 @@
+// Package hc is the relay's client for the new Herdr desktop app
+// (herdr-app window + herdr-core `hc` daemon). It shells out to the two CLIs
+// installed beside the user's binaries and decodes their JSON output into
+// topology records the phone can render next to the legacy herdr inventory.
+package hc
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// PanePrefix namespaces hc pane ids so they can never collide with legacy
+// herdr pane ids on the wire or in client-side pane caches.
+const PanePrefix = "hc:"
+
+// ErrUnavailable is returned when neither the app window nor the core daemon
+// answered; the watcher surfaces it as an offline inventory rather than an
+// empty one.
+var ErrUnavailable = errors.New("herdr app is not running")
+
+// Space mirrors `herdr-app ls` spaces[].tabs[].terminals[].
+type Space struct {
+	ID      string  `json:"id"`
+	Name    string  `json:"name"`
+	Folder  string  `json:"folder"`
+	Machine *string `json:"machine"`
+	Active  bool    `json:"active"`
+	Tabs    []Tab   `json:"tabs"`
+}
+
+type Tab struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Active    bool       `json:"active"`
+	Settled   bool       `json:"settled"`
+	Terminals []Terminal `json:"terminals"`
+}
+
+// Terminal is a pane as the app window reports it.
+type Terminal struct {
+	Address   string   `json:"terminal"`
+	Pane      string   `json:"pane"`
+	Status    *string  `json:"status"`
+	App       *string  `json:"app"`
+	Name      *string  `json:"name"`
+	SubAgents []string `json:"sub_agents"`
+}
+
+// CoreTerminal mirrors `hc ls --all --json` terminals[] plus the richer
+// `hc get` record.
+type CoreTerminal struct {
+	Address    string   `json:"address"`
+	Argv       []string `json:"argv"`
+	Agent      string   `json:"agent"`
+	Cwd        string   `json:"cwd"`
+	Name       string   `json:"name"`
+	State      string   `json:"state"`
+	Status     *string  `json:"status"`
+	Title      string   `json:"title"`
+	Turn       int      `json:"turn"`
+	Cols       int      `json:"cols"`
+	Rows       int      `json:"rows"`
+	CreatedMs  int64    `json:"created_ms"`
+	FinishedMs *int64   `json:"finished_ms"`
+	ExitCode   *int     `json:"exit_code"`
+	Pid        *int64   `json:"pid"`
+}
+
+type serverStatus struct {
+	Core struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"core"`
+	Version string `json:"version"`
+}
+
+type Client struct {
+	// AppBin is the herdr-app CLI (window topology); CoreBin is herdr-core
+	// (`hc`, terminal engine). Both resolve through exec.LookPath so the
+	// relay service PATH applies.
+	AppBin  string
+	CoreBin string
+	Timeout time.Duration
+}
+
+func NewClient(appBin, coreBin string) *Client {
+	if appBin == "" {
+		appBin = "herdr-app"
+	}
+	if coreBin == "" {
+		coreBin = "herdr-core"
+	}
+	return &Client{AppBin: appBin, CoreBin: coreBin, Timeout: 6 * time.Second}
+}
+
+func (c *Client) timeout() time.Duration {
+	if c.Timeout <= 0 {
+		return 6 * time.Second
+	}
+	return c.Timeout
+}
+
+func (c *Client) run(ctx context.Context, bin string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("%s %s: timed out", bin, strings.Join(args, " "))
+		}
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, fmt.Errorf("%s %s: %s", bin, strings.Join(args, " "), msg)
+	}
+	return stdout.Bytes(), nil
+}
+
+// Topology returns the window's spaces → tabs → terminals. An error means the
+// window is closed or unreachable; callers fall back to the core list.
+func (c *Client) Topology(ctx context.Context) ([]Space, error) {
+	out, err := c.run(ctx, c.AppBin, "ls")
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Spaces []Space `json:"spaces"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return nil, fmt.Errorf("herdr-app ls: %w", err)
+	}
+	return payload.Spaces, nil
+}
+
+// ServerID returns the core daemon's stable id/name for server_session_id
+// synthesis, or an error when the daemon is down.
+func (c *Client) ServerID(ctx context.Context) (string, error) {
+	out, err := c.run(ctx, c.CoreBin, "server", "status")
+	if err != nil {
+		return "", err
+	}
+	var status serverStatus
+	if err := json.Unmarshal(out, &status); err != nil {
+		return "", fmt.Errorf("hc server status: %w", err)
+	}
+	if status.Core.ID == "" {
+		return "", errors.New("hc server status: empty core id")
+	}
+	return status.Core.ID, nil
+}
+
+// Terminals lists live + finished terminals from the core daemon. It covers
+// machines/terminals the window does not show, so the watcher merges it under
+// the app topology.
+func (c *Client) Terminals(ctx context.Context) ([]CoreTerminal, error) {
+	out, err := c.run(ctx, c.CoreBin, "ls", "--all", "--json")
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Terminals []CoreTerminal `json:"terminals"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return nil, fmt.Errorf("hc ls: %w", err)
+	}
+	return payload.Terminals, nil
+}
+
+// Read returns the terminal screen plus `lines` of scrollback, ANSI stripped
+// by hc itself (its read output is plain text).
+func (c *Client) Read(ctx context.Context, address string, lines int) (string, error) {
+	out, err := c.run(ctx, c.CoreBin, "read", "--json", "--lines",
+		fmt.Sprintf("%d", lines), address)
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return "", fmt.Errorf("hc read %s: %w", address, err)
+	}
+	return payload.Text, nil
+}
+
+// Get returns the full record for one terminal (status, title, argv…).
+func (c *Client) Get(ctx context.Context, address string) (*CoreTerminal, error) {
+	out, err := c.run(ctx, c.CoreBin, "get", address, "--json")
+	if err != nil {
+		return nil, err
+	}
+	var term CoreTerminal
+	if err := json.Unmarshal(out, &term); err != nil {
+		return nil, fmt.Errorf("hc get %s: %w", address, err)
+	}
+	return &term, nil
+}
+
+// BusyTitle reports whether a terminal title carries an active braille
+// spinner (omp/pi render ⠋⠙⠹… while working). Used when no explicit
+// status is reported.
+func BusyTitle(title string) bool {
+	return strings.ContainsAny(title, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+}
+
+// Send pastes text into a terminal and presses enter. `hc send` itself waits
+// for the program to pause, so a busy agent surfaces as a context timeout;
+// the caller reports that as "agent is busy" rather than a hard failure.
+func (c *Client) Send(ctx context.Context, address, text string) error {
+	_, err := c.run(ctx, c.CoreBin, "send", address, text)
+	return err
+}
+
+// SendForce pastes text even when the program looks blocked.
+func (c *Client) SendForce(ctx context.Context, address, text string) error {
+	_, err := c.run(ctx, c.CoreBin, "send", "--force", address, text)
+	return err
+}
+
+// Keys presses named keys (enter, esc, up, ctrl+c, …).
+func (c *Client) Keys(ctx context.Context, address string, keys []string) error {
+	args := append([]string{"keys", address}, keys...)
+	_, err := c.run(ctx, c.CoreBin, args...)
+	return err
+}

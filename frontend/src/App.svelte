@@ -5,6 +5,7 @@
   import BrandLogo from '$components/ui/BrandLogo.svelte';
   import ActivityView from '$components/ActivityView.svelte';
   import LocalhostView from '$components/LocalhostView.svelte';
+  import HcView from '$components/HcView.svelte';
   import AgentList from '$components/AgentList.svelte';
   import AgentRail from '$components/AgentRail.svelte';
   import LaunchView from '$components/LaunchView.svelte';
@@ -72,6 +73,8 @@
   const relays = relayStore.relayConfigs;
   const connections = relayStore.connections;
   const agents = relayStore.agents;
+  const hcAgents = relayStore.hcAgents;
+  const hcInventories = relayStore.hcInventories;
   const workspaces = relayStore.workspaces;
   const activities = relayStore.activities;
   const frames = relayStore.terminalFrames;
@@ -124,7 +127,9 @@
       paneGraceExpired = false;
       if (paneGraceTimer) { clearTimeout(paneGraceTimer); paneGraceTimer = null; }
     }
-    const agent = $agents.find((candidate) => candidate.pane_id === view.paneId) || null;
+    const agent = $agents.find((candidate) => candidate.pane_id === view.paneId)
+      || $hcAgents.find((candidate) => candidate.pane_id === view.paneId)
+      || null;
     if (agent) {
       stickyAgent = agent;
       paneGraceExpired = false;
@@ -148,6 +153,12 @@
     return new Set($relays
       .filter((relay) => relayStore.deviceCredential(relay.id)?.role === 'reader')
       .map((relay) => relay.id));
+  });
+  // Any relay advertising hc_view (its herdr-core daemon exists) earns the
+  // Legacy/App view toggle on the list screens.
+  const hcAvailable = $derived.by(() => {
+    void $connections;
+    return [...$connections.values()].some((connection) => connection.capabilities.includes('hc_view'));
   });
   const activeConnection = $derived(activeAgent ? $connections.get(activeAgent.relay_id) : null);
   const conversationHistoryAvailable = $derived(hasConversationHistory(activeAgent, activeConnection));
@@ -490,7 +501,10 @@
   });
 
   function openAgent(agent: Agent) {
-    if (relayStore.deviceCredential(agent.relay_id)?.role !== 'reader') {
+    // hc panes have no acknowledge_pane server-side; sending one would toast
+    // a confusing "not supported" on every open.
+    if (relayStore.deviceCredential(agent.relay_id)?.role !== 'reader'
+      && !String(agent.raw_pane_id || '').startsWith('hc:')) {
       void relayStore.acknowledgePane(agent);
     }
     navigate(agentOpeningView(
@@ -512,7 +526,7 @@
     };
   }
 
-  function toggle(view: 'settings' | 'launch' | 'activity' | 'workspaces' | 'localhost') {
+  function toggle(view: 'settings' | 'launch' | 'activity' | 'workspaces' | 'localhost' | 'hc' | 'agents') {
     if ($currentView.view === view) closeCurrentView();
     else navigate({ view });
   }
@@ -739,6 +753,30 @@
           </svg>
         </Button>
         {/if}
+        {#if hcAvailable}
+        <span class="view-toggle" role="group" aria-label="Agent list source">
+          <Button
+            class="view-toggle-button"
+            variant="ghost"
+            size="icon"
+            aria-label="Legacy Herdr view"
+            title="Legacy Herdr view"
+            aria-pressed={$currentView.view === 'agents'}
+            data-active={$currentView.view === 'agents'}
+            onclick={() => replaceView({ view: 'agents' })}
+          >⌘</Button>
+          <Button
+            class="view-toggle-button"
+            variant="ghost"
+            size="icon"
+            aria-label="Herdr App view"
+            title="Herdr App view"
+            aria-pressed={$currentView.view === 'hc'}
+            data-active={$currentView.view === 'hc'}
+            onclick={() => replaceView({ view: 'hc' })}
+          >▣</Button>
+        </span>
+        {/if}
       {/if}
       <span class="nav-button-shell">
         <Button
@@ -757,7 +795,9 @@
     <LocalhostView relayId={$currentView.relayId || ''} />
   {/if}
 
-  {#if $currentView.view === 'settings'}
+  {#if $currentView.view === 'hc'}
+    <HcView connections={$connections} relays={$relays} onopen={openAgent} />
+  {:else if $currentView.view === 'settings'}
     <SettingsView {readOnlyRelayIds} />
   {:else if $currentView.view === 'workspaces'}
     <WorkspaceManager {readOnlyRelayIds} />

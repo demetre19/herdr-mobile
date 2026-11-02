@@ -165,6 +165,15 @@ func (s *Server) pollPaneWatch(watch *paneWatch) {
 	acknowledged := watch.acknowledged
 	watch.mu.Unlock()
 
+	// hc panes have no cheap probe in the legacy dispatcher — HandleProbePane
+	// would error every tick and the watch would freeze after its first
+	// frame. Read the frame directly; paneWatchUpdate dedupes against the
+	// acknowledged frame so an unchanged read never reaches the client.
+	if isHcPaneID(watch.paneID) {
+		s.pollHcPaneWatch(watch)
+		return
+	}
+
 	probe := s.dispatcher.HandleProbePane(watch.ctx, watchMessage(watch))
 	probeContent, ok := successfulPaneContent(probe)
 	if !ok {
@@ -203,10 +212,41 @@ func (s *Server) pollPaneWatch(watch *paneWatch) {
 	s.hub.Send(watch.client, message)
 }
 
+// pollHcPaneWatch is the hc counterpart of the probe+read poll: it always
+// reads the frame (hc has no probe RPC) and lets paneWatchUpdate suppress or
+// delta-encode unchanged content.
+func (s *Server) pollHcPaneWatch(watch *paneWatch) {
+	response, frame := s.readPaneWatchFrame(watch)
+	if frame == nil || !s.paneWatchCurrent(watch) {
+		return
+	}
+	watch.mu.Lock()
+	if watch.pending != nil {
+		watch.mu.Unlock()
+		return
+	}
+	watch.probeFingerprint = frame.contentFingerprint
+	acknowledged := watch.acknowledged
+	message := paneWatchUpdate(response, acknowledged, frame)
+	if message == nil {
+		watch.acknowledged = frame
+		watch.mu.Unlock()
+		return
+	}
+	watch.pending = frame
+	watch.mu.Unlock()
+	s.hub.Send(watch.client, message)
+}
+
 func (s *Server) readPaneWatchFrame(watch *paneWatch) (map[string]any, *paneWatchFrame) {
 	message := watchMessage(watch)
-	s.applyPaneReadLease(message)
-	response := s.preparePaneResponse(message, s.dispatcher.HandleReadPane(watch.ctx, message))
+	var response map[string]any
+	if isHcPaneID(watch.paneID) {
+		response = s.preparePaneResponse(message, s.hcReadPane(watch.ctx, message))
+	} else {
+		s.applyPaneReadLease(message)
+		response = s.preparePaneResponse(message, s.dispatcher.HandleReadPane(watch.ctx, message))
+	}
 	response["target"] = watch.target
 	content, ok := successfulPaneContent(response)
 	if !ok {

@@ -94,6 +94,7 @@ import type {
   Activity,
   Agent,
   AgentProfile,
+  HcInventory,
   AgentInventoryStatus,
   CommandResult,
   ConversationHistoryRequest,
@@ -541,6 +542,8 @@ class RelayStore {
   readonly activities = writable<Activity[]>([]);
   readonly terminalFrames = writable<Map<string, TerminalFrame>>(new Map());
   readonly responding = writable<Set<string>>(new Set());
+  readonly hcInventories = writable<Map<string, HcInventory>>(new Map());
+  readonly hcAgents = writable<Agent[]>([]);
   readonly toast = writable<ToastMessage | null>(null);
   readonly devices = writable<Map<string, DeviceSummary[]>>(new Map());
   readonly notificationBusy = writable(false);
@@ -562,6 +565,8 @@ class RelayStore {
   private pendingPaneReads = new Map<string, number>();
   private paneContentFingerprints = new Map<string, string>();
   private watchedPanes = new Map<string, Agent>();
+  private hcAgentsValue: Agent[] = [];
+  private hcInventoriesValue = new Map<string, HcInventory>();
   private paneWatchesStarted = new Set<string>();
   private slashCommandCache = new Map<string, SlashCommandCacheEntry>();
   private pendingSlashCommands = new Map<string, PendingSlashCommands>();
@@ -1309,6 +1314,9 @@ class RelayStore {
         .filter(isSpeechLanguage);
       adoptRelaySpeech(connection.speechLanguages);
       this.adoptHybridDescriptor(connection, message.hybrid);
+      if (message.hc && typeof message.hc === 'object') {
+        this.applyHcInventory(relayId, { ...(message.hc as Record<string, any>), type: 'hc_inventory' });
+      }
       const attentionCapable = connection.capabilities.includes('attention_classification');
       this.agentsValue = this.agentsValue.map((agent) =>
         agent.relay_id === relayId ? normalizeAgentAttention(agent, attentionCapable) : agent,
@@ -1490,6 +1498,10 @@ class RelayStore {
       this.publishAgents('agents snapshot');
       return;
     }
+    if (message.type === 'hc_inventory') {
+      this.applyHcInventory(relayId, message);
+      return;
+    }
     if (message.type === 'blocked') {
       const label = get(this.relayConfigs).find((relay) => relay.id === relayId)?.label || 'relay';
       const attentionCapable = Boolean(connection?.capabilities.includes('attention_classification'));
@@ -1538,6 +1550,7 @@ class RelayStore {
     const paneMessageTarget = (message: Record<string, any>): FrontendTargetRef | null => {
       const paneId = clientPaneId(relayId, String(message.pane_id || ''));
       const agent = this.agentsValue.find((candidate) => candidate.pane_id === paneId)
+        || this.hcAgentsValue.find((candidate) => candidate.pane_id === paneId)
         || this.watchedPanes.get(paneId);
       if (!agent) return null;
       if (!Object.prototype.hasOwnProperty.call(message, 'target')) return targetRefForAgent(agent);
@@ -1552,6 +1565,7 @@ class RelayStore {
       if (!target) return false;
       const paneId = clientPaneId(relayId, String(message.pane_id || ''));
       const agent = this.agentsValue.find((candidate) => candidate.pane_id === paneId)
+        || this.hcAgentsValue.find((candidate) => candidate.pane_id === paneId)
         || this.watchedPanes.get(paneId);
       return Boolean(agent && targetRefMatchesAgent(target, agent));
     };
@@ -1699,8 +1713,35 @@ class RelayStore {
     this.publishAgents('pane interaction');
   }
 
+  private applyHcInventory(relayId: string, message: Record<string, any>): void {
+    const label = get(this.relayConfigs).find((relay) => relay.id === relayId)?.label || 'relay';
+    const incoming = (Array.isArray(message.agents) ? message.agents : [])
+      .map((agent: Partial<Agent>) => normalizeAgent(relayId, label, normalizeAgentTargetFields(agent)));
+    // hc agents are an independent pane namespace: replace this relay's hc
+    // slice wholesale, keep every other relay's and the legacy list.
+    this.hcAgentsValue = [
+      ...this.hcAgentsValue.filter((agent) => agent.relay_id !== relayId),
+      ...incoming,
+    ];
+    this.hcAgents.set(this.hcAgentsValue);
+    this.hcInventoriesValue.set(relayId, {
+      state: String(message.state || 'ready'),
+      message: typeof message.message === 'string' ? message.message : '',
+      server_id: String(message.server_id || ''),
+      spaces: Array.isArray(message.spaces) ? message.spaces : [],
+      agents: incoming,
+      last_attempt_at: typeof message.last_attempt_at === 'number' ? message.last_attempt_at : 0,
+      last_success_at: typeof message.last_success_at === 'number' ? message.last_success_at : 0,
+    });
+    this.hcInventories.set(new Map(this.hcInventoriesValue));
+  }
+
   private removeAgentsForRelay(relayId: string): void {
     this.agentsValue = this.agentsValue.filter((agent) => agent.relay_id !== relayId);
+    this.hcAgentsValue = this.hcAgentsValue.filter((agent) => agent.relay_id !== relayId);
+    this.hcAgents.set(this.hcAgentsValue);
+    this.hcInventoriesValue.delete(relayId);
+    this.hcInventories.set(new Map(this.hcInventoriesValue));
     for (const paneId of this.blockedSnapshotMisses.keys()) {
       if (paneId.startsWith(`${relayId}::`)) this.blockedSnapshotMisses.delete(paneId);
     }

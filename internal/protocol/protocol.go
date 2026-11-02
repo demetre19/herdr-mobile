@@ -483,6 +483,9 @@ type PushConfig struct {
 	// connected over the legacy WSS URL, so the bridge window needs no QR
 	// re-scan. Omitted entirely when the relay has no gateway configured.
 	Hybrid map[string]any `json:"hybrid,omitempty"`
+	// Hc carries the Herdr App (herdr-app/hc) inventory snapshot when the
+	// relay hosts that app; older clients ignore unknown fields.
+	Hc any `json:"hc,omitempty"`
 }
 
 const AgentResponseCopyCapability = "agent_response_copy"

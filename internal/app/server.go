@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
@@ -33,6 +34,7 @@ import (
 	"github.com/0cv/herdr-mobile-relay/internal/copyresponse"
 	"github.com/0cv/herdr-mobile-relay/internal/deviceauth"
 	"github.com/0cv/herdr-mobile-relay/internal/fsutil"
+	"github.com/0cv/herdr-mobile-relay/internal/hc"
 	"github.com/0cv/herdr-mobile-relay/internal/herdr"
 	"github.com/0cv/herdr-mobile-relay/internal/history"
 	"github.com/0cv/herdr-mobile-relay/internal/noecho"
@@ -113,6 +115,8 @@ type Server struct {
 	copyMu           sync.Mutex
 	paneSizeM        *panesize.Manager
 	dispatcher       *coordinator.Dispatcher
+	hcC              *hc.Client
+	hcW              *hc.Watcher
 	updateM          *relayupdate.Manager
 	appDeployM       *appdeploy.Manager
 	hybrid           *hybridTransport
@@ -222,6 +226,14 @@ func New(cfg *config.Config, version, revision string, logger *slog.Logger) *Ser
 	logger.Info("speech synthesis available", "languages", strings.Join(speechLanguages, ","))
 	initialInventory := state.InventorySnapshot()
 
+	// The Herdr App lane is attached only when its binaries are installed;
+	// without them the relay stays legacy-only and never advertises hc_view.
+	var hcClient *hc.Client
+	var hcWatcher *hc.Watcher
+	if _, err := exec.LookPath("herdr-core"); err == nil {
+		hcClient = hc.NewClient("", "")
+		hcWatcher = hc.NewWatcher(hcClient, hostname, logger)
+	}
 	return &Server{
 		cfg:                 cfg,
 		version:             version,
@@ -242,6 +254,8 @@ func New(cfg *config.Config, version, revision string, logger *slog.Logger) *Ser
 		speechRemove:        speech.Remove,
 		speechLanguages:     speechLanguages,
 		herdrC:              herdrClient,
+		hcC:                 hcClient,
+		hcW:                 hcWatcher,
 		paneSizeM:           panesize.NewManager(herdrClient, logger),
 		profiles:            profResolver,
 		sessions:            sessResolver,
@@ -691,7 +705,13 @@ func (s *Server) Run(ctx context.Context) error {
 			return
 		}
 		_, authenticated := client.Identity()
-		if targetErr := validateExactPaneTarget(s.state, inbound, authenticated); targetErr != nil {
+		var targetErr *protocol.ApiError
+		if isHcPaneID(inbound.PaneID) {
+			targetErr = s.validateHcPaneTarget(inbound, authenticated)
+		} else {
+			targetErr = validateExactPaneTarget(s.state, inbound, authenticated)
+		}
+		if targetErr != nil {
 			admitted()
 			s.hub.Send(client, protocol.ErrorResponse(inbound.RequestID, *targetErr))
 			return
@@ -707,6 +727,12 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 
 		commandCtx := ctx
+		// Herdr App lane: pane ids namespaced hc: never reach the legacy
+		// dispatcher — they are answered by the hc watcher and `hc` CLI.
+		if isHcPaneID(inbound.PaneID) {
+			s.dispatchHcCommand(commandCtx, client, inbound, action, msg)
+			return
+		}
 		switch action {
 		case "check_update":
 			s.hub.Broadcast(map[string]any{"type": "update_status", "update": map[string]any{
@@ -1373,6 +1399,10 @@ func (s *Server) Run(ctx context.Context) error {
 	})
 	startBackground(func() { s.poller.RunEvents(ctx, eventClient) })
 	startBackground(func() { s.captureHistoryLoop(ctx) })
+	if s.hcW != nil {
+		s.hcW.SetOnChange(func(hc.Snapshot) { s.publishHcInventory() })
+		startBackground(func() { s.hcW.Run(ctx) })
+	}
 	startBackground(func() { s.paneSizeM.Run(ctx) })
 	profileSignals := make(chan os.Signal, 1)
 	signal.Notify(profileSignals, syscall.SIGHUP)
@@ -1478,6 +1508,9 @@ func (s *Server) effectiveCapabilitiesFor(herdrStatus herdr.ServerStatus) []stri
 	}
 	if herdrStatus.Supports(herdr.FeatureWorkspaceMoveBlock) {
 		capabilities = append(capabilities, "workspace_reorder_block")
+	}
+	if s.hcW != nil {
+		capabilities = append(capabilities, "hc_view")
 	}
 	if s.appDeployM.State().Configured {
 		capabilities = append(capabilities, "app_deploy")
@@ -2682,6 +2715,12 @@ func (s *Server) currentPaneRevision(ctx context.Context, paneID string) (int64,
 }
 
 func (s *Server) agentInfo(paneID string) (agent, cwd string) {
+	if isHcPaneID(paneID) {
+		if a, ok := s.hcAgent(paneID); ok {
+			return a.Agent, a.Cwd
+		}
+		return "", ""
+	}
 	for _, a := range s.state.Snapshot() {
 		if a.PaneID == paneID {
 			return a.Agent, a.Cwd
@@ -2720,6 +2759,7 @@ func (s *Server) sendConnectionSnapshot(client *transport.ClientConn) {
 		Inventory:       inventory,
 		AgentProfiles:   s.profiles.Profiles(),
 		Hybrid:          s.hybridDescriptor(),
+		Hc:              s.hcPayload(),
 	})
 	s.hub.Send(client, map[string]any{
 		"type":   "agents",
