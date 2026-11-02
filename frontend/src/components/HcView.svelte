@@ -14,7 +14,7 @@
     tabName,
     worktreeTailStart,
   } from '$lib/agents';
-  import { pinnedConversations, togglePinnedConversation } from '$lib/preferences';
+  import { pinnedConversations, togglePinnedConversation, persistHcDisclosure } from '$lib/preferences';
   import { homeRelativePath } from '$lib/workspaces';
   import AgentLogo from './AgentLogo.svelte';
   import AppDialog from './ui/AppDialog.svelte';
@@ -25,11 +25,26 @@
     connections,
     relays,
     onopen,
+    disclosure = $bindable<Record<string, boolean>>({}),
   }: {
     connections: Map<string, RelayConnectionView>;
     relays: RelayConfig[];
     onopen: (agent: Agent) => void;
+    disclosure?: Record<string, boolean>;
   } = $props();
+
+  // Closed space groups remember their state. Default is open — only a
+  // deliberate close lands in the pref (a re-rendered open never writes).
+  function rememberDisclosure(key: string, event: ToggleEvent) {
+    const details = event.currentTarget;
+    if (!(details instanceof HTMLDetailsElement)) return;
+    if (details.open) delete disclosure[key];
+    else disclosure[key] = false;
+    persistHcDisclosure(disclosure);
+  }
+  function disclosureOpen(key: string): boolean {
+    return disclosure[key] ?? true;
+  }
 
   const hcInventories = relayStore.hcInventories;
   const responding = relayStore.responding;
@@ -407,7 +422,8 @@
             {#each windowSpaces as space (space.id)}
               {@const rows = spaceRows(space, byAddress, section.relayId)}
               {#if rows.length > 0}
-                <details class="workspace-card" open>
+                {@const dKey = `hc:${section.relayId}:${space.id}`}
+                <details class="workspace-card" open={disclosureOpen(dKey)} ontoggle={(event) => rememberDisclosure(dKey, event)}>
                   <summary>
                     <span class="agent-project">{space.name || 'Space'}</span>
                     {#if space.machine}<span class="agent-count">{space.machine}</span>{/if}
@@ -422,7 +438,8 @@
             {/each}
 
             {#if coreAgents.length > 0}
-              <details class="workspace-card" open>
+              {@const coreKey = `hc:${section.relayId}:core-terminals`}
+              <details class="workspace-card" open={disclosureOpen(coreKey)} ontoggle={(event) => rememberDisclosure(coreKey, event)}>
                 <summary>
                   <span class="agent-project">Core terminals</span>
                   <span class="agent-count">{coreAgents.length}</span>

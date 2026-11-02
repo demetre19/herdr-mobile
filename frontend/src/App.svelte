@@ -40,6 +40,7 @@
     paneAgentViewOverrides,
     pinnedConversations,
     readWorkspaceDisclosure,
+    readHcDisclosure,
     listSource,
     setListSource,
     togglePinnedConversation,
@@ -87,6 +88,7 @@
   let jumpOpen = $state(false);
   let workspaceOpen = $state(false);
   let workspaceDisclosure = $state<Record<string, boolean>>(readWorkspaceDisclosure());
+  let hcDisclosure = $state<Record<string, boolean>>(readHcDisclosure());
   let lastBlocked = new Set<string>();
   let previousView = '';
   let terminalUnavailable = $state(false);
@@ -809,7 +811,7 @@
   {/if}
 
   {#if $currentView.view === 'hc'}
-    <HcView connections={$connections} relays={$relays} onopen={openAgent} />
+    <HcView connections={$connections} relays={$relays} onopen={openAgent} bind:disclosure={hcDisclosure} />
   {:else if $currentView.view === 'settings'}
     <SettingsView {readOnlyRelayIds} />
   {:else if $currentView.view === 'workspaces'}

@@ -8,6 +8,7 @@ import {
   DEFAULT_AGENT_VIEW_KEY,
   DEFAULT_DIRECTORY_KEY,
   DIRECTORY_USAGE_KEY,
+  HC_DISCLOSURE_KEY,
   FAVORITE_AGENT_KEY,
   PANE_AGENT_VIEW_OVERRIDES_KEY,
   PINNED_CONVERSATIONS_KEY,
@@ -589,6 +590,34 @@ export function persistWorkspaceDisclosure(map: Record<string, boolean>): 'saved
   try {
     if (Object.keys(map).length) localStorage.setItem(WORKSPACE_DISCLOSURE_KEY, JSON.stringify(map));
     else localStorage.removeItem(WORKSPACE_DISCLOSURE_KEY);
+  } catch {
+    return 'unavailable';
+  }
+  return 'saved';
+}
+
+// --- App (hc) space disclosure persistence ---------------------------------
+
+export function readHcDisclosure(storage?: Pick<Storage, 'getItem'>): Record<string, boolean> {
+  try {
+    const raw = (storage || localStorage).getItem(HC_DISCLOSURE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'boolean') out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function persistHcDisclosure(map: Record<string, boolean>): 'saved' | 'unavailable' {
+  try {
+    if (Object.keys(map).length) localStorage.setItem(HC_DISCLOSURE_KEY, JSON.stringify(map));
+    else localStorage.removeItem(HC_DISCLOSURE_KEY);
   } catch {
     return 'unavailable';
   }

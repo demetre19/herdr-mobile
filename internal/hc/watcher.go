@@ -42,6 +42,9 @@ type Watcher struct {
 	snapshot Snapshot
 	// fingerprints detect changes without re-broadcasting identical polls.
 	fingerprint string
+	// metaStates caches per-terminal session-JSONL meta (role/model/effort)
+	// so unchanged files never re-read and remote resolves throttle.
+	metaStates map[string]*sessionMetaState
 }
 
 func NewWatcher(client *Client, hostname string, logger *slog.Logger) *Watcher {
@@ -181,11 +184,30 @@ func (w *Watcher) poll(ctx context.Context) {
 		if full.Title != "" && a.TabLabel == "" {
 			a.TabLabel = full.Title
 		}
-		// Role/model/effort chips: `hc get` exposes the live foreground
-		// argv, so --model/--role/--effort launch flags (or a mid-session
-		// restart's new flags) resolve without the OMP session JSONL the
-		// legacy lane scans.
-		role, model, effort := AgentFlags(full.AgentArgv())
+		// Role/model/effort chips: launch argv flags first (`--model
+		// pi/<role>` covers the role), then the OMP session JSONL — window
+		// tabs launch `omp` bare with only --session-dir, so the JSONL's
+		// model_change/thinking_level_change entries are the only source
+		// of the model/effort a flag-less launch is running.
+		argv := full.AgentArgv()
+		role, model, effort := AgentFlags(argv)
+		if a.Agent == "omp" {
+			if dir := SessionDir(argv); dir != "" {
+				meta := w.sessionMetaFor(ctx, a.TerminalID, dir)
+				if meta.roleLive {
+					role = meta.role
+				}
+				if meta.model != "" {
+					model = meta.model
+				}
+				if meta.effort != "" {
+					effort = meta.effort
+				}
+			}
+			if role == "" {
+				role = "default"
+			}
+		}
 		a.AgentRole = role
 		a.AgentModel = model
 		a.AgentEffort = effort

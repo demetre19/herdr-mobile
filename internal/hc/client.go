@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -373,6 +375,118 @@ func (c *Client) Read(ctx context.Context, address string, lines int) (string, e
 	}
 	return payload.Text, nil
 }
+
+// ReadStyled returns the terminal's screen as an ANSI/VT stream (colors
+// preserved), collected from `hc attach --observe --history <lines>`. The
+// attach replays the styled screen then streams live output; an observer
+// needs only the initial replay, so the stream is closed once output has
+// been quiet for styledReadQuietAfter (or the cap/deadline hits). Plain
+// `hc read` stays the text path — this exists because read is
+// ANSI-stripped and the phone renders the ansi format.
+func (c *Client) ReadStyled(ctx context.Context, address string, lines int) ([]byte, error) {
+	if lines < 0 {
+		lines = 0
+	}
+	if lines > styledReadHistoryMax {
+		lines = styledReadHistoryMax
+	}
+	deadline, cancel := context.WithTimeout(ctx, styledReadMaxWait)
+	defer cancel()
+	cmd := exec.CommandContext(deadline, c.CoreBin, "attach", "--observe",
+		"--history", fmt.Sprintf("%d", lines), address)
+	cmd.Stdin = nil
+	var mu sync.Mutex
+	var buf bytes.Buffer
+	cmd.Stdout = &lockedBuffer{mu: &mu, buf: &buf, cap: styledReadMaxBytes}
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	lastLen, lastGrow := 0, time.Now()
+	for {
+		select {
+		case <-deadline.Done():
+			<-done
+			mu.Lock()
+			out := append([]byte(nil), buf.Bytes()...)
+			mu.Unlock()
+			if len(out) == 0 {
+				return nil, deadline.Err()
+			}
+			return out, nil
+		case err := <-done:
+			mu.Lock()
+			out := append([]byte(nil), buf.Bytes()...)
+			mu.Unlock()
+			if err != nil && len(out) == 0 {
+				return nil, err
+			}
+			return out, nil
+		default:
+		}
+		mu.Lock()
+		n := buf.Len()
+		mu.Unlock()
+		if n > lastLen {
+			lastLen, lastGrow = n, time.Now()
+		} else if lastLen > 0 && time.Since(lastGrow) >= styledReadQuietAfter {
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			<-done
+			mu.Lock()
+			out := append([]byte(nil), buf.Bytes()...)
+			mu.Unlock()
+			return out, nil
+		} else if lastLen == 0 && time.Since(lastGrow) >= styledReadFirstByte {
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			<-done
+			return nil, fmt.Errorf("hc attach %s: no replay output", address)
+		}
+		select {
+		case <-time.After(25 * time.Millisecond):
+		case <-deadline.Done():
+		}
+	}
+}
+
+// lockedBuffer is a capped, mutex-guarded Write sink for the attach replay.
+type lockedBuffer struct {
+	mu  *sync.Mutex
+	buf *bytes.Buffer
+	cap int
+}
+
+func (w *lockedBuffer) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.buf.Len()+len(p) > w.cap {
+		remaining := w.cap - w.buf.Len()
+		if remaining <= 0 {
+			return len(p), nil
+		}
+		w.buf.Write(p[:remaining])
+		return len(p), nil
+	}
+	w.buf.Write(p)
+	return len(p), nil
+}
+
+// ReadStyled limits: the replay bursts fast, then live output trickles —
+// quiet means "the screen is fully painted". 4s of silence covers a slow
+// remote hop; the 12s outer deadline bounds attach+collection for a dead
+// core; 2MiB bounds scrollback on an --observe stream.
+const (
+	styledReadQuietAfter = 1500 * time.Millisecond
+	styledReadFirstByte  = 4 * time.Second
+	styledReadMaxWait    = 12 * time.Second
+	styledReadMaxBytes   = 2 << 20
+	styledReadHistoryMax = 500
+)
 
 // Get returns the full record for one terminal (status, title, argv…).
 func (c *Client) Get(ctx context.Context, address string) (*CoreTerminal, error) {

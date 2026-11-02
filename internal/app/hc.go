@@ -149,7 +149,13 @@ func (s *Server) hcReadPane(ctx context.Context, message map[string]any) map[str
 	if lines > 500 {
 		lines = 500
 	}
-	content, err := s.hcC.Read(ctx, hcAddress(paneID), lines)
+	var content string
+	var err error
+	if format == "ansi" {
+		content, err = s.hcStyledContent(ctx, hcAddress(paneID), lines)
+	} else {
+		content, err = s.hcC.Read(ctx, hcAddress(paneID), lines)
+	}
 	if err != nil {
 		return map[string]any{"type": "pane_content", "pane_id": paneID, "content": "", "format": format, "error": "Unable to read the Herdr App terminal"}
 	}
@@ -158,6 +164,49 @@ func (s *Server) hcReadPane(ctx context.Context, message map[string]any) map[str
 		"format": format, "truncated": false, "viewport_only": false,
 		"interaction": nil, "question_layout": false,
 	}
+}
+
+// hcStyledFrame caches one attach-collected ANSI frame per terminal. `hc
+// attach --observe` replays the styled screen then streams live output, so a
+// full collect costs ~1.5s of quiet detection — too expensive per watch tick
+// (250ms+). A fresh-enough frame is served verbatim; TerminalView's keyed-row
+// splice keeps the repaint stable anyway.
+type hcStyledFrame struct {
+	content  string
+	captured time.Time
+}
+
+const hcStyledFreshness = 1500 * time.Millisecond
+
+func (s *Server) hcStyledContent(ctx context.Context, address string, lines int) (string, error) {
+	s.hcStyledMu.Lock()
+	if s.hcStyledCache == nil {
+		s.hcStyledCache = make(map[string]hcStyledFrame)
+	}
+	cached, ok := s.hcStyledCache[address]
+	s.hcStyledMu.Unlock()
+	if ok && time.Since(cached.captured) < hcStyledFreshness {
+		return cached.content, nil
+	}
+	raw, err := s.hcC.ReadStyled(ctx, address, lines)
+	if err != nil {
+		// A dead/finished terminal falls back to the plain-text read — a
+		// monochrome frame beats an error toast for a pane that is simply
+		// finished.
+		fallback, ferr := s.hcC.Read(ctx, address, lines)
+		if ferr != nil {
+			return "", err
+		}
+		return fallback, nil
+	}
+	content := string(raw)
+	s.hcStyledMu.Lock()
+	if s.hcStyledCache == nil {
+		s.hcStyledCache = make(map[string]hcStyledFrame)
+	}
+	s.hcStyledCache[address] = hcStyledFrame{content: content, captured: time.Now()}
+	s.hcStyledMu.Unlock()
+	return content, nil
 }
 
 // hcSendKeys maps the phone's semantic key names onto `hc keys` arguments.

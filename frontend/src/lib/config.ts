@@ -43,6 +43,10 @@ export const PANE_AGENT_VIEW_OVERRIDES_KEY = 'herdr_pane_agent_view_overrides';
 export const PINNED_WORKSPACES_KEY = 'herdr_pinned_workspaces';
 export const PINNED_CONVERSATIONS_KEY = 'herdr_pinned_conversations';
 export const WORKSPACE_DISCLOSURE_KEY = 'herdr_workspace_disclosure';
+// Space groups in the App (hc) view persist their open/closed state under a
+// separate key — AgentList writes the legacy map wholesale and would clobber
+// hc entries on a shared key.
+export const HC_DISCLOSURE_KEY = 'herdr_hc_disclosure';
 export const DEFAULT_DIRECTORY_KEY = 'herdr_default_directory';
 export const DIRECTORY_USAGE_KEY = 'herdr_directory_usage';
 export const FAVORITE_AGENT_KEY = 'herdr_favorite_agent';
