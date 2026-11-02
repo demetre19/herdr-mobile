@@ -159,6 +159,70 @@ func (c *Client) ServerID(ctx context.Context) (string, error) {
 	return status.Core.ID, nil
 }
 
+// TabNew mounts a new tab + terminal in the open window via `herdr-app do`.
+// tab.new lands in the SELECTED space, which can live on a remote machine —
+// callers pass the id of a space local to this machine (pick via
+// LocalSpaceID); with no local space, space.new creates one (its machine
+// defaults to this one, unlike tab.new's selected-space semantics).
+// name/folder/argv/task are optional; an error means the window is closed or
+// refused the command.
+func (c *Client) TabNew(ctx context.Context, spaceID, name, folder string, argv []string, task string) error {
+	args := []string{"do", "tab.new", "--space", spaceID}
+	if spaceID == "" {
+		// space.new names its first tab with --tab, not --name.
+		args = []string{"do", "space.new", "--tab", name}
+	} else if name != "" {
+		args = append(args, "--name", name)
+	}
+	if folder != "" {
+		args = append(args, "--folder", folder)
+	}
+	if len(argv) > 0 {
+		raw, err := json.Marshal(argv)
+		if err != nil {
+			return fmt.Errorf("tab.new argv: %w", err)
+		}
+		args = append(args, "--argv", string(raw))
+	}
+	if task != "" {
+		args = append(args, "--task", task)
+	}
+	out, err := c.run(ctx, c.AppBin, args...)
+	if err != nil {
+		return err
+	}
+	var payload struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return fmt.Errorf("herdr-app do %s: %w", args[1], err)
+	}
+	if payload.Error != "" {
+		return errors.New(payload.Error)
+	}
+	return nil
+}
+
+// LocalSpaceID returns a window space belonging to this machine — remote
+// machines' spaces carry a federation machine name, local ones have
+// Machine nil. The active local space wins; empty means none is open.
+func LocalSpaceID(spaces []Space) string {
+	fallback := ""
+	for _, space := range spaces {
+		if space.Machine != nil {
+			continue
+		}
+		if space.Active {
+			return space.ID
+		}
+		if fallback == "" {
+			fallback = space.ID
+		}
+	}
+	return fallback
+}
+
 // Terminals lists live + finished terminals from the core daemon. It covers
 // machines/terminals the window does not show, so the watcher merges it under
 // the app topology.

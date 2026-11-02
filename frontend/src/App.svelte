@@ -40,6 +40,8 @@
     paneAgentViewOverrides,
     pinnedConversations,
     readWorkspaceDisclosure,
+    listSource,
+    setListSource,
     togglePinnedConversation,
   } from '$lib/preferences';
   import { initializeSpeech, stopSpeech } from '$lib/speech';
@@ -158,6 +160,27 @@
     void $connections;
     return [...$connections.values()].some((connection) => connection.capabilities.includes('hc_view'));
   });
+  // Persisted list source: hc is the default for new installs; whichever the
+  // reader last picked stays picked across restarts (the toggle records it).
+  // Applied once relays connect — while the phone sits on the untouched
+  // landing view, so it never yanks the reader mid-navigation.
+  let listSourceApplied = false;
+  $effect(() => {
+    if (listSourceApplied || !hcAvailable || $currentView.view !== 'agents') return;
+    listSourceApplied = true;
+    if ($listSource === 'hc') navigate({ view: 'hc' });
+  });
+  function toggleListSource() {
+    const next = $currentView.view === 'hc' ? 'agents' : 'hc';
+    setListSource(next === 'hc' ? 'hc' : 'agents');
+    replaceView({ view: next } as ViewState);
+  }
+  // ＋ launches into the surface the reader is looking at: Herdr App view →
+  // a mounted app terminal; everywhere else → a legacy herdr agent.
+  function toggleLaunch() {
+    if ($currentView.view === 'launch') { closeCurrentView(); return; }
+    navigate({ view: 'launch', hc: $currentView.view === 'hc' });
+  }
   const activeConnection = $derived(activeAgent ? $connections.get(activeAgent.relay_id) : null);
   const conversationHistoryAvailable = $derived(hasConversationHistory(activeAgent, activeConnection));
   $effect(() => {
@@ -648,7 +671,7 @@
     ></span>
     <div class="header-title">
       <div class="header-brand">
-        {#if headerTitle === 'herdr'}<BrandLogo size={20} />{/if}<h1>{headerTitle}</h1>
+        {#if headerTitle === 'herdr'}<span class:hc-brand={$currentView.view === 'hc'}><BrandLogo size={20} /></span>{/if}<h1>{headerTitle}</h1>
       </div>
       {#if headerMeta}<span>{headerMeta}</span>{/if}
     </div>
@@ -736,7 +759,7 @@
             <path d="M8 13h8M12 9v8"></path>
           </svg>
         </Button>
-        <Button variant="ghost" size="icon" aria-label="Start agent" onclick={() => toggle('launch')}>＋</Button>
+        <Button variant="ghost" size="icon" aria-label="Start agent" onclick={toggleLaunch}>＋</Button>
         <Button variant="ghost" size="icon" aria-label="Activity history" onclick={() => toggle('activity')}>
           <svg class="header-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="9"></circle>
@@ -759,7 +782,7 @@
           aria-label={$currentView.view === 'hc' ? 'Herdr App view — tap for legacy Herdr view' : 'Legacy Herdr view — tap for Herdr App view'}
           title={$currentView.view === 'hc' ? 'Herdr App view — tap for legacy Herdr view' : 'Legacy Herdr view — tap for Herdr App view'}
           aria-pressed={$currentView.view === 'hc'}
-          onclick={() => replaceView({ view: $currentView.view === 'hc' ? 'agents' : 'hc' })}
+          onclick={toggleListSource}
         >{$currentView.view === 'hc' ? '▣' : '⌘'}</Button>
         {/if}
       {/if}
@@ -791,6 +814,7 @@
       relayId={$currentView.relayId}
       workspaceId={$currentView.workspaceId}
       cwd={$currentView.cwd}
+      hc={$currentView.hc}
       {readOnlyRelayIds}
     />
   {:else if $currentView.view === 'activity'}

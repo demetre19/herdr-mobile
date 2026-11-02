@@ -1009,6 +1009,8 @@ func (s *Server) Run(ctx context.Context) error {
 			s.handleLocalhostFetch(client, msg)
 		case "local_http_request":
 			s.handleLocalhostRequest(client, msg)
+		case "hc_launch":
+			s.handleHcLaunch(commandCtx, client, inbound, msg)
 		case "list_slash_commands":
 			requestID, _ := msg["request_id"].(string)
 			paneID, _ := msg["pane_id"].(string)
@@ -1510,7 +1512,7 @@ func (s *Server) effectiveCapabilitiesFor(herdrStatus herdr.ServerStatus) []stri
 		capabilities = append(capabilities, "workspace_reorder_block")
 	}
 	if s.hcW != nil {
-		capabilities = append(capabilities, "hc_view")
+		capabilities = append(capabilities, "hc_view", "hc_launch")
 	}
 	if s.appDeployM.State().Configured {
 		capabilities = append(capabilities, "app_deploy")

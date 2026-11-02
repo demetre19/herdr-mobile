@@ -49,6 +49,7 @@ export const FAVORITE_AGENT_KEY = 'herdr_favorite_agent';
 export const APPEARANCE_KEY = 'herdr_appearance';
 export const ACCENT_KEY = 'herdr_accent';
 export const ACCENT_CUSTOM_KEY = 'herdr_accent_custom';
+export const LIST_SOURCE_KEY = 'herdr_list_source';
 
 export const APP_PROTOCOL_VERSION = __APP_PROTOCOL_VERSION__;
 export const APP_VERSION = __APP_VERSION__;

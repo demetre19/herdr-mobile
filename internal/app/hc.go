@@ -297,3 +297,38 @@ func hcSendError(err error) string {
 	}
 	return msg
 }
+
+// handleHcLaunch mounts a new tab + terminal in the open Herdr window.
+// profile_id resolves to the profile's argv (same catalog as agent_start);
+// name/folder/prompt map to tab.new's name/folder/task. Requires the window:
+// when herdr-app is closed the phone gets a readable failure instead of a
+// terminal that lives invisibly under "Core terminals".
+func (s *Server) handleHcLaunch(ctx context.Context, client *transport.ClientConn, inbound protocol.Inbound, msg map[string]any) {
+	fail := func(text string) {
+		s.sendCommandResult(client, inbound.RequestID, "hc_launch", false, "failed", text, "", nil)
+	}
+	if s.hcC == nil {
+		fail("Herdr App is unavailable on this relay")
+		return
+	}
+	profileID, _ := msg["profile_id"].(string)
+	name, _ := msg["name"].(string)
+	folder, _ := msg["cwd"].(string)
+	task, _ := msg["prompt"].(string)
+	if profileID == "" || folder == "" {
+		fail("Profile and working directory are required")
+		return
+	}
+	profile, exists := s.profiles.Profile(profileID)
+	if !exists || len(profile.Argv) == 0 {
+		fail("That agent profile is unavailable on this relay")
+		return
+	}
+	spaceID := hc.LocalSpaceID(s.hcSnapshot().Spaces)
+	if err := s.hcC.TabNew(ctx, spaceID, name, folder, profile.Argv, task); err != nil {
+		fail(hcSendError(err))
+		return
+	}
+	s.sendCommandResult(client, inbound.RequestID, "hc_launch", true, "completed", "", "",
+		map[string]any{"name": name, "cwd": folder})
+}

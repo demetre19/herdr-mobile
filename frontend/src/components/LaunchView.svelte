@@ -15,11 +15,13 @@
     relayId: requestedRelayId = '',
     workspaceId = '',
     cwd: requestedCwd = '',
+    hc = false,
     readOnlyRelayIds = new Set<string>(),
   }: {
     relayId?: string;
     workspaceId?: string;
     cwd?: string;
+    hc?: boolean;
     readOnlyRelayIds?: Set<string>;
   } = $props();
   const relays = relayStore.relayConfigs;
@@ -47,10 +49,24 @@
   let directoryQuery = $state('');
   let directoryNotice = $state('');
 
-  const connectedRelays = $derived($relays.filter((relay) => {
-    const connection = $connections.get(relay.id);
-    return connection?.status === 'connected' && connection.inventory.state === 'ready';
+  // Launch target: 'app' starts a mounted tab+terminal in the machine's Herdr
+  // App window (hc_launch), 'legacy' a classic herdr agent. The caller sets the
+  // default from the view the reader was on; the chips let them override.
+  const hcCapable = $derived.by(() => {
+    void $connections;
+    return [...$connections.values()].some((conn) => conn.capabilities.includes('hc_launch'));
+  });
+  let launchTarget = $state<'legacy' | 'app'>(untrack(() => hc ? 'app' : 'legacy'));
+  const hcRelays = $derived($relays.filter((relay) => {
+    const conn = $connections.get(relay.id);
+    return conn?.status === 'connected' && conn.capabilities.includes('hc_launch');
   }));
+  const connectedRelays = $derived(launchTarget === 'app'
+    ? hcRelays
+    : $relays.filter((relay) => {
+      const connection = $connections.get(relay.id);
+      return connection?.status === 'connected' && connection.inventory.state === 'ready';
+    }));
   const unavailableRelays = $derived($relays.filter((relay) => {
     const connection = $connections.get(relay.id);
     return connection?.status === 'connected' && connection.inventory.state !== 'ready';
@@ -169,6 +185,7 @@
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     if (!relayId || readOnly || connection?.directoryLoading || directoryRelayId !== relayId || !profileId || !cwd || !name) return;
+    if (launchTarget === 'app') { void submitApp(); return; }
     submitting = true;
     error = false;
     status = 'Starting agent…';
@@ -213,10 +230,44 @@
       submitting = false;
     }
   }
+
+  async function submitApp() {
+    submitting = true;
+    error = false;
+    status = 'Starting agent in Herdr App…';
+    try {
+      const launchName = name.trim();
+      const launchCwd = cwd.trim();
+      await relayStore.sendCommand(relayId, {
+        type: 'hc_launch',
+        profile_id: profileId,
+        name: launchName,
+        cwd: launchCwd,
+        prompt,
+      }, 30_000);
+      recordDirectoryUse(relayId, launchCwd);
+      relayStore.showToast('Agent started in Herdr App.');
+      replaceView({ view: 'hc' });
+    } catch (caught) {
+      status = (caught as Error).message;
+      error = true;
+      relayStore.showToast(status, true);
+    } finally {
+      submitting = false;
+    }
+  }
 </script>
 
 <main class="page launch-page" aria-labelledby="launch-title">
-  <h2 id="launch-title">Start Agent</h2>
+  <div class="launch-head">
+    <h2 id="launch-title">Start Agent</h2>
+    {#if hcCapable}
+      <div class="conversation-mode launch-target" role="group" aria-label="Where the agent starts">
+        <button type="button" class:active={launchTarget === 'legacy'} aria-pressed={launchTarget === 'legacy'} onclick={() => { launchTarget = 'legacy'; }}>⌘ Legacy</button>
+        <button type="button" class:active={launchTarget === 'app'} aria-pressed={launchTarget === 'app'} onclick={() => { launchTarget = 'app'; }}>▣ App</button>
+      </div>
+    {/if}
+  </div>
   <Card>
     <form class="form-stack" onfocusin={closeDirectoryForOtherField} onsubmit={submit}>
       <label for="launch-relay">Computer</label>
@@ -232,7 +283,9 @@
         <p class="warning" role="status">Agent inventory is unavailable on {unavailableRelays.map((relay) => relay.label).join(', ')}.</p>
       {/if}
       {#if readOnly}<p class="warning" role="status">This paired device has read-only access to the selected relay.</p>{/if}
-      {#if targetWorkspace}
+      {#if launchTarget === 'app'}
+        <p class="hint">Opens as a tab in the selected machine's Herdr App window.</p>
+      {:else if targetWorkspace}
         <p class="hint">New tab in workspace <strong>{targetWorkspace.label}</strong>. The desktop keeps its current focus.</p>
       {/if}
 

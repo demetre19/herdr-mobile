@@ -358,6 +358,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 /* Legacy/App list-source toggle: one icon button in a standard 2.45rem
    slot — tap flips the view, the accent glyph names the active source. */
 .app-header nav .view-toggle { color: var(--primary); font-size: 1rem; }
+.hc-brand { color: var(--primary); display: inline-flex; }
+.launch-head { align-items: center; display: flex; justify-content: space-between; gap: .5rem; }
+.launch-head h2 { margin: 0; }
 .app-header.home-header > .status-dot { margin-inline-start: 1rem; }
 .header-title { display: flex; flex: 1; flex-direction: row; align-items: baseline; justify-content: space-between; gap: .45rem; min-width: 0; }
 .header-brand { align-items: center; display: flex; gap: .45rem; min-width: 0; }

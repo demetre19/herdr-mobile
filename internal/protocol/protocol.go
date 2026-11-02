@@ -122,6 +122,7 @@ var actionCatalog = map[string]ActionMetadata{
 	"get_conversation_history": readAction("get_conversation_history"),
 	"install_update":           mutateAction("install_update", false, false),
 	"lease_pane_size":          mutateAction("lease_pane_size", true, false),
+	"hc_launch":                mutateAction("hc_launch", false, true),
 	"list_directories":         readAction("list_directories"),
 	"local_http_request":       mutateAction("local_http_request", false, false),
 	"local_http_fetch":         readAction("local_http_fetch"),

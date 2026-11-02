@@ -9,7 +9,7 @@ export type ViewState =
   | { view: 'agents' }
   | { view: 'settings' }
   | { view: 'workspaces' }
-  | { view: 'launch'; relayId?: string; workspaceId?: string; cwd?: string }
+  | { view: 'launch'; relayId?: string; workspaceId?: string; cwd?: string; hc?: boolean }
   | { view: 'activity' }
   | { view: 'activity_detail'; key: string }
   | { view: 'localhost'; relayId?: string }
@@ -51,6 +51,7 @@ export function stateFromLocation(locationValue: Pick<Location, 'hash'> = locati
         relayId: String(target.relayId || ''),
         workspaceId: String(target.workspaceId || ''),
         cwd: String(target.cwd || ''),
+        hc: target.hc === true,
       };
     } catch {
       return { view: 'launch' };
@@ -113,11 +114,12 @@ export function viewUrl(state: ViewState): string {
   if (state.view === 'settings') return '#settings';
   if (state.view === 'workspaces') return '#workspaces';
   if (state.view === 'launch') {
-    if (!state.workspaceId) return '#launch';
+    if (!state.workspaceId && !state.hc) return '#launch';
     return `#launch=${encodeURIComponent(JSON.stringify({
       relayId: state.relayId || '',
       workspaceId: state.workspaceId,
       cwd: state.cwd || '',
+      ...(state.hc ? { hc: true } : {}),
     }))}`;
   }
   if (state.view === 'activity') return '#activity';

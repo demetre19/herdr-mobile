@@ -26,6 +26,7 @@ import {
   TERMINAL_REFRESH_OPTIONS,
   LOCALHOST_PORTS_KEY,
   LOCALHOST_ENABLED_KEY,
+  LIST_SOURCE_KEY,
   LOCALHOST_PORTS_LIMIT,
   DEFAULT_LOCALHOST_PORTS,
   parseLocalhostPorts,
@@ -143,6 +144,19 @@ function savedLocalhostPorts(): number[] {
 // it, not to gate a first-run opt-in.
 function savedLocalhostEnabled(): boolean {
   return localStorage.getItem(LOCALHOST_ENABLED_KEY) !== 'false';
+}
+
+// The list-source toggle ('agents' legacy | 'hc' Herdr App) persists exactly
+// what the reader last chose; absent means the new app — first installs land
+// on the Herdr App view when a relay advertises it.
+export type ListSource = 'agents' | 'hc';
+function savedListSource(): ListSource {
+  return localStorage.getItem(LIST_SOURCE_KEY) === 'agents' ? 'agents' : 'hc';
+}
+export const listSource = writable<ListSource>(savedListSource());
+export function setListSource(value: ListSource): void {
+  localStorage.setItem(LIST_SOURCE_KEY, value);
+  listSource.set(value);
 }
 
 // Mixed by default: one card per workspace with a state dot reads better than
