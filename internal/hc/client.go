@@ -63,7 +63,7 @@ type CoreTerminal struct {
 	Cwd        string            `json:"cwd"`
 	Name       string            `json:"name"`
 	State      string            `json:"state"`
-	Status     *string           `json:"status"`
+	Status     TerminalStatus    `json:"status"`
 	Title      string            `json:"title"`
 	Turn       int               `json:"turn"`
 	Cols       int               `json:"cols"`
@@ -80,6 +80,34 @@ type CoreTerminal struct {
 		Argv []string `json:"argv"`
 		Name string   `json:"name"`
 	} `json:"foreground"`
+}
+
+// TerminalStatus decodes the `status` field's two wire shapes: `hc ls`
+// reports a plain string ("working"), `hc get` reports an object
+// ({"app":"omp","state":"done"}). A typed string field silently rejected
+// every `hc get` record — no chips, no live status, no title ever made it
+// into the snapshot.
+type TerminalStatus struct {
+	State string
+	App   string
+}
+
+func (s *TerminalStatus) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	if data[0] == '"' {
+		return json.Unmarshal(data, &s.State)
+	}
+	var obj struct {
+		State string `json:"state"`
+		App   string `json:"app"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	s.State, s.App = obj.State, obj.App
+	return nil
 }
 
 // agentArgv returns the most informative argv on the record: the live

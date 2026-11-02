@@ -176,8 +176,8 @@ func (w *Watcher) poll(ctx context.Context) {
 			continue
 		}
 		fetched++
-		if full.Status != nil && *full.Status != "" {
-			a.Status = *full.Status
+		if full.Status.State != "" {
+			a.Status = full.Status.State
 		} else if a.Status == "idle" && BusyTitle(full.Title) {
 			a.Status = "working"
 		}
@@ -305,8 +305,8 @@ func agentRecord(hostname, serverID string, space Space, tab Tab, term Terminal,
 	if term.Status != nil {
 		status = *term.Status
 	}
-	if status == "" && core != nil && core.Status != nil {
-		status = *core.Status
+	if status == "" && core != nil {
+		status = core.Status.State
 	}
 	if status == "" && core != nil {
 		// hc statuses: live terminals report working/idle via title events;
@@ -320,6 +320,9 @@ func agentRecord(hostname, serverID string, space Space, tab Tab, term Terminal,
 	agent := ""
 	if term.App != nil {
 		agent = *term.App
+	}
+	if agent == "" && core != nil && core.Status.App != "" {
+		agent = core.Status.App
 	}
 	if agent == "" && core != nil {
 		agent = core.Agent

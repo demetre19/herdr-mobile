@@ -227,9 +227,14 @@ func (w *Watcher) remoteSessionMeta(ctx context.Context, address, dir string) (h
 	if !ok {
 		return hcSessionMeta{}, "", false
 	}
+	// grep the meta events instead of tailing: model_change entries can sit
+	// megabytes into a multi-MB session file, so a fixed tail window misses
+	// them entirely; grepping the two types keeps the payload tiny and
+	// covers the whole file in one round-trip.
 	script := `f=$(ls -t "$1"/*.jsonl 2>/dev/null | head -n 1); ` +
 		`if [ -z "$f" ]; then exit 3; fi; ` +
-		`printf '__FILE__ %s\n' "$f"; tail -c ` + fmt.Sprint(hcRemoteMetaTailBytes) + ` "$f"`
+		`printf '__FILE__ %s\n' "$f"; ` +
+		`grep -a -h '"type":"model_change"\|"type":"thinking_level_change"' "$f" | tail -n 40`
 	out, err := w.client.execOn(ctx, machine, "/bin/sh", "-c", script, "sh", dir)
 	if err != nil {
 		return hcSessionMeta{}, "", false
