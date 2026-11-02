@@ -195,7 +195,10 @@
   });
   const workspaceInspectionAvailable = $derived(Boolean(
     activeAgent?.cwd
-    && activeConnection?.capabilities.includes('workspace_inspection'),
+    && activeConnection?.capabilities.includes('workspace_inspection')
+    // hc: federation terminals (machine/addr) run on another machine —
+    // the relay only inspects local workspaces.
+    && !(activeAgent?.pane_id?.startsWith('hc:') && activeAgent?.terminal_id?.includes('/')),
   ));
   const connected = $derived([...$connections.values()].filter((connection) => connection.status === 'connected').length);
   const connecting = $derived([...$connections.values()].some((connection) => connection.status === 'connecting'));
@@ -665,6 +668,7 @@
     {/if}
     <span
       class={`status-dot status-${headerIndicator.tone}`}
+      class:hc-pane-dot={Boolean(activeAgent?.pane_id?.startsWith('hc:'))}
       class:hollow={headerIndicator.hollow}
       role="img"
       aria-label={headerIndicator.label}

@@ -1,19 +1,34 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/0cv/herdr-mobile-relay/internal/coordinator"
 	"github.com/0cv/herdr-mobile-relay/internal/protocol"
 	"github.com/0cv/herdr-mobile-relay/internal/transport"
 	"github.com/0cv/herdr-mobile-relay/internal/upload"
-	"strings"
 )
 
 func (s *Server) validateUploadTarget(target protocol.TargetRef) error {
 	if target.ServerSessionID != "primary" {
 		return &upload.Error{Code: "upload_scope_mismatch"}
+	}
+	// hc: panes live in the Herdr App watcher, not the legacy state — a
+	// synthesized record + generation still proves the target tuple.
+	if isHcPaneID(target.PaneID) {
+		if s.hcW == nil {
+			return &upload.Error{Code: "upload_scope_mismatch"}
+		}
+		agent, exists := s.hcW.Agent(target.PaneID)
+		if !exists || agent.TerminalID != target.TerminalID || agent.Generation != target.Generation {
+			return &upload.Error{Code: "upload_scope_mismatch"}
+		}
+		return nil
 	}
 	agent, exists := s.state.Agent(target.PaneID)
 	if !exists || agent.TerminalID != target.TerminalID || agent.Generation != target.Generation ||
@@ -46,7 +61,23 @@ func (s *Server) expandPromptAttachmentReferences(action string, message map[str
 			if err != nil {
 				return &upload.Error{Code: "attachment_reference_invalid"}
 			}
-			lines[index] = "Attachment: " + attachment.Path
+			path := attachment.Path
+			// hc: terminals may run on another machine — `hc put` places
+			// the staged object beside the terminal (on its machine) and
+			// reports the path the agent can actually open.
+			if isHcPaneID(target.PaneID) {
+				if s.hcC == nil {
+					return &upload.Error{Code: "attachment_reference_invalid"}
+				}
+				putCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				landed, putErr := s.hcC.Put(putCtx, hcAddress(target.PaneID), path)
+				cancel()
+				if putErr != nil {
+					return &upload.Error{Code: "attachment_reference_invalid"}
+				}
+				path = landed
+			}
+			lines[index] = "Attachment: " + path
 		}
 		message[field] = strings.Join(lines, "\n")
 	}

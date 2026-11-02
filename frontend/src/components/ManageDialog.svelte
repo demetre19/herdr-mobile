@@ -35,6 +35,10 @@
   const sessionRenameAvailable = $derived(Boolean(
     agent && String(agent.agent || '').trim().toLocaleLowerCase().replace(/[\s_-]+/g, '') !== 'opencode',
   ));
+  // Herdr App terminals (hc:) have no OMP session JSONL and no fresh-agent
+  // restart path: session rename is absent, and Clear Agent's herdr restart
+  // is a plain interrupt there, which is not what the button promises.
+  const isHcPane = $derived(Boolean(agent?.pane_id?.startsWith('hc:')));
 
   $effect(() => {
     if (!open) {
@@ -248,10 +252,12 @@
       </p>
       <div class="dialog-actions">
         <Button data-rename-action="tab" disabled={busy || readOnly} onclick={() => beginRename('tab')}>Rename Tab</Button>
-        {#if sessionRenameAvailable}
+        {#if sessionRenameAvailable && !isHcPane}
           <Button data-rename-action="session" variant="secondary" disabled={busy || readOnly} onclick={() => beginRename('session')}>Rename Session</Button>
         {/if}
-        <Button data-confirm-action="clear" variant="secondary" disabled={busy || readOnly} onclick={clearAgent}>Clear Agent</Button>
+        {#if !isHcPane}
+          <Button data-confirm-action="clear" variant="secondary" disabled={busy || readOnly} onclick={clearAgent}>Clear Agent</Button>
+        {/if}
         <Button data-confirm-action="stop" variant="danger" disabled={busy || readOnly} onclick={stopAgent}>Stop Agent</Button>
         <Button variant="ghost" disabled={busy} onclick={() => { open = false; }}>Close</Button>
       </div>

@@ -55,21 +55,125 @@ type Terminal struct {
 // CoreTerminal mirrors `hc ls --all --json` terminals[] plus the richer
 // `hc get` record.
 type CoreTerminal struct {
-	Address    string   `json:"address"`
-	Argv       []string `json:"argv"`
-	Agent      string   `json:"agent"`
-	Cwd        string   `json:"cwd"`
-	Name       string   `json:"name"`
-	State      string   `json:"state"`
-	Status     *string  `json:"status"`
-	Title      string   `json:"title"`
-	Turn       int      `json:"turn"`
-	Cols       int      `json:"cols"`
-	Rows       int      `json:"rows"`
-	CreatedMs  int64    `json:"created_ms"`
-	FinishedMs *int64   `json:"finished_ms"`
-	ExitCode   *int     `json:"exit_code"`
-	Pid        *int64   `json:"pid"`
+	Address    string            `json:"address"`
+	Argv       []string          `json:"argv"`
+	Agent      string            `json:"agent"`
+	Cwd        string            `json:"cwd"`
+	Name       string            `json:"name"`
+	State      string            `json:"state"`
+	Status     *string           `json:"status"`
+	Title      string            `json:"title"`
+	Turn       int               `json:"turn"`
+	Cols       int               `json:"cols"`
+	Rows       int               `json:"rows"`
+	CreatedMs  int64             `json:"created_ms"`
+	FinishedMs *int64            `json:"finished_ms"`
+	ExitCode   *int              `json:"exit_code"`
+	Pid        *int64            `json:"pid"`
+	Labels     map[string]string `json:"labels"`
+	// Foreground describes the process currently holding the terminal —
+	// its argv carries --model/--role/--effort launch flags when the
+	// program accepts them (the chip data the phone renders).
+	Foreground *struct {
+		Argv []string `json:"argv"`
+		Name string   `json:"name"`
+	} `json:"foreground"`
+}
+
+// agentArgv returns the most informative argv on the record: the live
+// foreground process when present, else the launch argv.
+func (t *CoreTerminal) AgentArgv() []string {
+	if t.Foreground != nil && len(t.Foreground.Argv) > 0 {
+		return t.Foreground.Argv
+	}
+	return t.Argv
+}
+
+// Do runs `herdr-app do <command> [flags]` and returns the app's error
+// string when it refuses. Used by commands the core CLI does not cover
+// (tab/space renames live on the window, not the daemon).
+func (c *Client) Do(ctx context.Context, command string, args ...string) error {
+	argv := append([]string{"do", command}, args...)
+	out, err := c.run(ctx, c.AppBin, argv...)
+	if err != nil {
+		return err
+	}
+	var payload struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return fmt.Errorf("herdr-app do %s: %w", command, err)
+	}
+	if payload.Error != "" {
+		return errors.New(payload.Error)
+	}
+	return nil
+}
+
+// Kill ends a terminal's program (`hc kill`). Works on remote-machine
+// addresses too — the core daemon owns the process.
+func (c *Client) Kill(ctx context.Context, address string) error {
+	_, err := c.run(ctx, c.CoreBin, "kill", address)
+	return err
+}
+
+// Put copies a relay-local file beside the terminal on its machine and
+// returns the absolute path `hc put` reports (`machine/addr` terminals
+// land the file on the remote machine, which is exactly what the agent
+// must paste).
+func (c *Client) Put(ctx context.Context, address, path string) (string, error) {
+	out, err := c.run(ctx, c.CoreBin, "put", "--json", address, path)
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		Path    string `json:"path"`
+		Dest    string `json:"destination"`
+		Landed  string `json:"landed"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		// --json unsupported or text output: take the last non-empty line.
+		lines := strings.FieldsFunc(string(out), func(r rune) bool { return r == '\n' })
+		for i := len(lines) - 1; i >= 0; i-- {
+			if line := strings.TrimSpace(lines[i]); line != "" {
+				return line, nil
+			}
+		}
+		return "", fmt.Errorf("hc put %s: empty output", address)
+	}
+	for _, candidate := range []string{payload.Path, payload.Dest, payload.Landed, payload.Message} {
+		if strings.HasPrefix(candidate, "/") {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("hc put %s: no path in output", address)
+}
+
+// TabRename renames a window tab (`herdr-app do tab.rename`).
+func (c *Client) TabRename(ctx context.Context, tabID, name string) error {
+	return c.Do(ctx, "tab.rename", "--id", tabID, "--name", name)
+}
+
+// TypeText types text into a terminal WITHOUT submitting — the hc keys
+// vocabulary only accepts one key per argument, so each rune becomes its
+// own call parameter (" " → space). That is deliberately byte-exact:
+// question UIs treat a pasted-and-submitted string as an answer, where
+// typing leaves the text editable.
+func (c *Client) TypeText(ctx context.Context, address, text string) error {
+	keys := make([]string, 0, len(text))
+	for _, r := range text {
+		if r == ' ' {
+			keys = append(keys, "space")
+		} else {
+			keys = append(keys, string(r))
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return c.Keys(ctx, address, keys)
 }
 
 type serverStatus struct {
@@ -236,7 +340,7 @@ func (c *Client) Terminals(ctx context.Context) ([]CoreTerminal, []string, error
 		return nil, nil, err
 	}
 	var payload struct {
-		Machines  []struct {
+		Machines []struct {
 			Name string `json:"name"`
 		} `json:"machines"`
 		Terminals []CoreTerminal `json:"terminals"`

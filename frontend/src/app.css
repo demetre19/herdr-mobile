@@ -361,6 +361,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .hc-brand { color: var(--primary); display: inline-flex; }
 .launch-head { align-items: center; display: flex; justify-content: space-between; gap: .5rem; }
 .hc-pane-badge { color: var(--primary); flex: 0 0 auto; font-size: .95rem; line-height: 1; }
+.hc-pane-dot, .hc-pane-dot.hollow { background: var(--primary); border-color: var(--primary); }
 .app-header.home-header > .status-dot { flex: 0 0 auto; margin-inline-start: 1rem; }
 /* The brand + relay count never shrink: when the icon row outgrows the
    width, the nav's overflow-x:auto takes the overflow — the reader swipes

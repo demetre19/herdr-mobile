@@ -9,15 +9,16 @@ import (
 	"time"
 
 	"github.com/0cv/herdr-mobile-relay/internal/coordinator"
+	"github.com/0cv/herdr-mobile-relay/internal/question"
 )
 
 // Snapshot is the phone-facing view of the new Herdr app: spaces with their
 // tabs (window topology when the window is open), plus every terminal as an
 // AgentState so list/detail views can reuse the legacy card + frame plumbing.
 type Snapshot struct {
-	Available   bool
-	Message     string
-	ServerID    string
+	Available bool
+	Message   string
+	ServerID  string
 	// Machines lists the federation's remote machine names; qualified
 	// <machine>/<addr> terminals mirror an owning machine's bare terminal, so
 	// the phone needs them to fold duplicates when both machines are paired.
@@ -180,9 +181,93 @@ func (w *Watcher) poll(ctx context.Context) {
 		if full.Title != "" && a.TabLabel == "" {
 			a.TabLabel = full.Title
 		}
+		// Role/model/effort chips: `hc get` exposes the live foreground
+		// argv, so --model/--role/--effort launch flags (or a mid-session
+		// restart's new flags) resolve without the OMP session JSONL the
+		// legacy lane scans.
+		role, model, effort := AgentFlags(full.AgentArgv())
+		a.AgentRole = role
+		a.AgentModel = model
+		a.AgentEffort = effort
+	}
+	// Idle omp-shaped terminals might be sitting on a question/approval —
+	// hc reports no attention state, so the same parser the legacy lane
+	// runs over pane content classifies what the screen is asking for.
+	// Reads are bounded per poll and only idle terminals pay for one;
+	// a working terminal is by definition not waiting on input.
+	const questionLimit = 8
+	interrogated := 0
+	for _, a := range agents {
+		if interrogated >= questionLimit {
+			break
+		}
+		if a.Status != "idle" && a.Status != "" {
+			continue
+		}
+		if !question.Supports(a.Agent) {
+			continue
+		}
+		interrogated++
+		content, err := w.client.Read(ctx, a.TerminalID, 80)
+		if err != nil {
+			continue
+		}
+		classification := question.Classify(content, a.Agent)
+		switch classification.Kind {
+		case question.AttentionQuestion, question.AttentionApproval:
+			a.Status = "blocked"
+			a.AttentionKind = classification.Kind
+			a.Prompt = classification.Prompt
+			a.Command = classification.Command
+			a.Options = classification.Options
+			a.Interaction = classification.Interaction
+			a.QuestionLayout = classification.QuestionLayout
+			if classification.Interaction != nil {
+				a.InteractionID = classification.Interaction.ID
+			}
+			if classification.Kind == question.AttentionApproval {
+				a.ApprovalFingerprint = question.ApprovalFingerprint(classification)
+			}
+		default:
+			a.AttentionKind = classification.Kind
+			a.Prompt = classification.Prompt
+		}
 	}
 	snap.Agents = agents
 	w.commit(snap)
+}
+
+// AgentFlags extracts --model/--role/--effort (and =forms) from a launch
+// argv for the card chips. Only a pi/<role> --model counts as the role —
+// a model literal stays in the model slot, matching the legacy scanner.
+func AgentFlags(argv []string) (role, model, effort string) {
+	take := func(i *int, arg, name string) (string, bool) {
+		if arg == name && *i+1 < len(argv) {
+			return argv[*i+1], true
+		}
+		if strings.HasPrefix(arg, name+"=") {
+			return strings.TrimPrefix(arg, name+"="), true
+		}
+		return "", false
+	}
+	for i, arg := range argv {
+		if value, ok := take(&i, arg, "--model"); ok {
+			if r, isRole := strings.CutPrefix(value, "pi/"); isRole {
+				role = r
+			} else {
+				model = value
+			}
+			continue
+		}
+		if value, ok := take(&i, arg, "--role"); ok && role == "" {
+			role = value
+			continue
+		}
+		if value, ok := take(&i, arg, "--effort"); ok {
+			effort = value
+		}
+	}
+	return role, model, effort
 }
 
 // agentRecord synthesizes the AgentState the phone consumes. Pane ids are

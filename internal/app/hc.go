@@ -2,14 +2,20 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/0cv/herdr-mobile-relay/internal/coordinator"
 	"github.com/0cv/herdr-mobile-relay/internal/hc"
 	"github.com/0cv/herdr-mobile-relay/internal/history"
 	"github.com/0cv/herdr-mobile-relay/internal/protocol"
+	"github.com/0cv/herdr-mobile-relay/internal/question"
+	"github.com/0cv/herdr-mobile-relay/internal/slashcmd"
 	"github.com/0cv/herdr-mobile-relay/internal/transport"
+	"github.com/0cv/herdr-mobile-relay/internal/workspace"
 )
 
 // This file is the Herdr App (herdr-app/herdr-core, `hc`) lane: pane ids
@@ -160,20 +166,62 @@ func (s *Server) hcReadPane(ctx context.Context, message map[string]any) map[str
 func hcSendKeyArgs(keys []string) []string {
 	out := make([]string, 0, len(keys))
 	for _, key := range keys {
-		switch strings.ToLower(strings.TrimSpace(key)) {
+		mapped := strings.ToLower(strings.TrimSpace(key))
+		switch mapped {
 		case "enter", "return":
-			out = append(out, "enter")
+			mapped = "enter"
 		case "escape", "esc":
-			out = append(out, "esc")
+			mapped = "esc"
 		case "up", "down", "left", "right", "tab", "space", "backspace":
-			out = append(out, strings.ToLower(key))
+			// already hc vocabulary
 		default:
-			if key != "" {
-				out = append(out, key)
+			// PlanInput emits "Shift+Tab"/"Ctrl+U"-style combos; hc keys
+			// takes the same names lowercase ("shift+tab", "ctrl+u").
+		}
+		out = append(out, mapped)
+	}
+	return out
+}
+
+// hcQuestionKeys executes a PlanInput sequence on an hc terminal: key
+// steps go through hc keys one press at a time (the legacy dispatcher's
+// 150ms pacing applies), text steps type without submitting — question
+// UIs would treat a pasted+submitted string as a finished answer.
+func (s *Server) hcQuestionKeys(ctx context.Context, address string, steps []question.InputStep) error {
+	for index, step := range steps {
+		if len(step.Keys) > 0 {
+			for _, key := range hcSendKeyArgs(step.Keys) {
+				if err := s.hcC.Keys(ctx, address, []string{key}); err != nil {
+					if index > 0 {
+						return fmt.Errorf("question input was only partially applied: %w", err)
+					}
+					return err
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(150 * time.Millisecond):
+				}
+			}
+		}
+		if step.Text != "" {
+			if err := s.hcC.TypeText(ctx, address, step.Text); err != nil {
+				return fmt.Errorf("question input was only partially applied: %w", err)
 			}
 		}
 	}
-	return out
+	return nil
+}
+
+// hcQuestionInteraction reads a terminal and parses its live question
+// surface; the result must match the interaction the phone thinks it is
+// answering before any key is sent.
+func (s *Server) hcQuestionInteraction(ctx context.Context, address, agent string) (*question.Interaction, error) {
+	content, err := s.hcC.Read(ctx, address, 80)
+	if err != nil {
+		return nil, err
+	}
+	return question.Parse(content, agent), nil
 }
 
 // dispatchHcCommand handles pane commands whose pane_id is namespaced hc:.
@@ -215,10 +263,29 @@ func (s *Server) dispatchHcCommand(ctx context.Context, client *transport.Client
 		return
 	}
 	address := hcAddress(inbound.PaneID)
+	// Attachment references in the composer arrive as "Attachment: <ref>"
+	// lines; the staged object must be re-pathed beside the terminal
+	// (`hc put` handles remote machines) before the text is sent — the
+	// shared expander never runs for hc: panes because they dispatch here.
+	if action == "send_input" || action == "send_text" || action == "submit_prompt" {
+		if err := s.expandPromptAttachmentReferences(action, msg, inbound.Target); err != nil {
+			fail("One or more attachments are no longer available for this agent")
+			return
+		}
+		if text, ok := msg["text"].(string); ok {
+			inbound.Text = text
+		}
+		if prompt, ok := msg["prompt"].(string); ok {
+			inbound.Prompt = prompt
+		}
+	}
 
 	switch action {
-	case "send_input", "send_text", "submit_prompt", "respond", "answer_question", "send_secret":
+	case "send_input", "send_text", "submit_prompt":
 		text := inbound.Text
+		if text == "" {
+			text = inbound.Prompt
+		}
 		if text == "" {
 			text = inbound.Choice
 		}
@@ -234,16 +301,72 @@ func (s *Server) dispatchHcCommand(ctx context.Context, client *transport.Client
 			return
 		}
 		s.sendCommandResult(client, inbound.RequestID, action, true, "completed", "", inbound.PaneID, nil)
-	case "clarify_question":
-		if strings.TrimSpace(inbound.Text) == "" {
+	case "send_secret":
+		// No-echo prompts read single runes; a paste+enter wraps the
+		// secret in bracketed-paste markers a noecho read echoes raw.
+		if inbound.Text == "" {
 			fail("Nothing to send")
 			return
 		}
-		if err := s.hcC.Send(ctx, address, inbound.Text); err != nil {
+		if err := s.hcC.TypeText(ctx, address, inbound.Text); err != nil {
+			fail(hcSendError(err))
+			return
+		}
+		if err := s.hcC.Keys(ctx, address, []string{"enter"}); err != nil {
 			fail(hcSendError(err))
 			return
 		}
 		s.sendCommandResult(client, inbound.RequestID, action, true, "completed", "", inbound.PaneID, nil)
+	case "respond":
+		// Approval menus are arrow-navigated, not typed. Verify the live
+		// screen still shows the approval the phone confirmed (kind,
+		// option count, label at index, fingerprint), then send the same
+		// Up/Down+Enter sequence the legacy dispatcher derives.
+		agent, ok := s.hcAgent(inbound.PaneID)
+		if !ok {
+			fail("That terminal no longer exists")
+			return
+		}
+		content, err := s.hcC.Read(ctx, address, 80)
+		if err != nil {
+			fail("Unable to read the Herdr App terminal")
+			return
+		}
+		classification := question.Classify(content, agent.Agent)
+		if classification.Kind != question.AttentionApproval || len(classification.Options) == 0 {
+			fail("This approval request is no longer current")
+			return
+		}
+		index := 0
+		if inbound.Index != nil {
+			index = *inbound.Index
+		}
+		if index < 0 || index >= len(classification.Options) ||
+			(inbound.Choice != "" && classification.Options[index] != inbound.Choice) {
+			fail("Approval choices are no longer available")
+			return
+		}
+		if inbound.ApprovalFingerprint != "" &&
+			question.ApprovalFingerprint(classification) != inbound.ApprovalFingerprint {
+			fail("Approval choices are no longer available")
+			return
+		}
+		distance := index - classification.ApprovalFocus
+		key := "down"
+		if distance < 0 {
+			key = "up"
+			distance = -distance
+		}
+		keys := make([]string, 0, distance+1)
+		for range distance {
+			keys = append(keys, key)
+		}
+		keys = append(keys, "enter")
+		if err := s.hcC.Keys(ctx, address, keys); err != nil {
+			fail(hcSendError(err))
+			return
+		}
+		s.sendCommandResult(client, inbound.RequestID, action, true, "accepted", "", inbound.PaneID, nil)
 	case "send_keys":
 		keys := hcSendKeyArgs(inbound.Keys)
 		if len(keys) == 0 {
@@ -279,6 +402,143 @@ func (s *Server) dispatchHcCommand(ctx context.Context, client *transport.Client
 		}
 		s.sendCommandResult(client, inbound.RequestID, action, true, "completed", "",
 			inbound.PaneID, map[string]any{"text": content})
+	case "agent_stop":
+		// `hc kill` ends the program on any machine the federation serves.
+		if err := s.hcC.Kill(ctx, address); err != nil {
+			fail(hcSendError(err))
+			return
+		}
+		s.sendCommandResult(client, inbound.RequestID, action, true, "completed", "", inbound.PaneID, nil)
+	case "agent_rename":
+		// The tab name lives in the window (`herdr-app do tab.rename`),
+		// not on the terminal — agent.TabID carries the tab id.
+		name := inbound.Name
+		if name == "" {
+			name = inbound.Label
+		}
+		if strings.TrimSpace(name) == "" {
+			fail("Nothing to rename to")
+			return
+		}
+		agent, ok := s.hcAgent(inbound.PaneID)
+		if !ok || agent.TabID == "" {
+			fail("That terminal is not mounted in the Herdr App window")
+			return
+		}
+		if err := s.hcC.TabRename(ctx, agent.TabID, name); err != nil {
+			fail(hcSendError(err))
+			return
+		}
+		s.sendCommandResult(client, inbound.RequestID, action, true, "completed", "", inbound.PaneID, nil)
+	case "answer_question", "navigate_question", "clarify_question":
+		// Same flow as the legacy lane: read → parse → verify the
+		// interaction the phone answered is still on screen → PlanInput
+		// keys/text, paced. clarify passes its free text as OtherText.
+		agent, ok := s.hcAgent(inbound.PaneID)
+		if !ok {
+			fail("That terminal no longer exists")
+			return
+		}
+		interaction, err := s.hcQuestionInteraction(ctx, address, agent.Agent)
+		if err != nil {
+			fail("Unable to read the Herdr App terminal")
+			return
+		}
+		if interaction == nil || (inbound.InteractionID != "" && interaction.ID != inbound.InteractionID) {
+			fail("The question changed before the answer was applied")
+			return
+		}
+		intent := question.InputIntent{
+			Navigation:    inbound.Direction,
+			Selected:      inbound.SelectedIndices,
+			OtherSelected: inbound.OtherSelected,
+			OtherText:     inbound.OtherText,
+		}
+		if action == "clarify_question" {
+			intent.Clarify = true
+			if inbound.OtherText == "" {
+				intent.OtherText = inbound.Text
+			}
+		}
+		steps := question.PlanInput(interaction, intent)
+		if len(steps) == 0 {
+			fail("Nothing to send")
+			return
+		}
+		if err := s.hcQuestionKeys(ctx, address, steps); err != nil {
+			fail(hcSendError(err))
+			return
+		}
+		s.sendCommandResult(client, inbound.RequestID, action, true, "accepted", "", inbound.PaneID, nil)
+	case "send_filter_text":
+		// Type into a live question's filter without submitting.
+		if strings.TrimSpace(inbound.Text) == "" {
+			fail("Nothing to send")
+			return
+		}
+		if err := s.hcC.TypeText(ctx, address, inbound.Text); err != nil {
+			fail(hcSendError(err))
+			return
+		}
+		s.sendCommandResult(client, inbound.RequestID, action, true, "accepted", "", inbound.PaneID, nil)
+	case "workspace_tree", "workspace_file", "workspace_git_status", "workspace_git_diff", "workspace_file_write":
+		// Local-machine terminals share the relay's filesystem, so the
+		// same inspector the legacy lane serves applies verbatim.
+		// Federation addresses (machine/addr) are remote — hc file/exec
+		// could reach them, but the wire shapes differ; answered plainly.
+		if strings.Contains(address, "/") {
+			fail("Workspace inspection is only available for terminals on this machine")
+			return
+		}
+		agent, ok := s.hcAgent(inbound.PaneID)
+		if !ok {
+			fail("That terminal no longer exists")
+			return
+		}
+		cwd := strings.TrimSpace(agent.Cwd)
+		var data any
+		var inspectErr error
+		switch action {
+		case "workspace_tree":
+			data, inspectErr = workspace.TreeFor(cwd)
+		case "workspace_file":
+			data, inspectErr = workspace.ReadFile(cwd, inbound.Path)
+		case "workspace_git_status":
+			data, inspectErr = workspace.GitStatusFor(ctx, cwd)
+		case "workspace_git_diff":
+			data, inspectErr = workspace.GitDiffFor(ctx, cwd, inbound.Path)
+		case "workspace_file_write":
+			data, inspectErr = workspace.WriteFile(cwd, inbound.Path, inbound.Text)
+		}
+		if inspectErr != nil {
+			var public *workspace.Error
+			message := "Workspace inspection failed"
+			if errors.As(inspectErr, &public) {
+				message = public.Message
+			}
+			fail(message)
+			return
+		}
+		s.sendCommandResult(client, inbound.RequestID, action, true, "completed", "", inbound.PaneID, data)
+	case "list_slash_commands":
+		// The catalog is agent-name + cwd driven; a hc terminal's agent
+		// resolves through the reported-agent fallback (ResolvePane keys
+		// on legacy panes only). Runtime pi commands need the herdr
+		// socket, which does not exist on this lane — the static
+		// filesystem catalog still matches.
+		agent, ok := s.hcAgent(inbound.PaneID)
+		if !ok {
+			fail("That terminal no longer exists")
+			return
+		}
+		agentName, cwd := agent.Agent, agent.Cwd
+		home, _ := os.UserHomeDir()
+		skillDirs, commandFormat, suppressNative := s.profiles.CommandDiscovery("")
+		catalog := slashcmd.CatalogForProfileWithSuppression(
+			"", agentName, cwd, home, skillDirs, commandFormat, "", "", suppressNative,
+		)
+		catalog = fitSlashCommandCatalog(slashcmd.Revise(catalog), inbound.RequestID, "list_slash_commands", inbound.PaneID)
+		s.sendCommandResult(client, inbound.RequestID, action, true, "completed", "", inbound.PaneID, catalog)
 	default:
 		fail(fmt.Sprintf("%s is not supported for Herdr App terminals", action))
 	}
