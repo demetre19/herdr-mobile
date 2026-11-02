@@ -90,9 +90,12 @@
 ## Herdr App ("hc") lane (v1.0.32)
 
 - `internal/hc` watches the new Herdr app: `herdr-app ls` (window topology)
-  merged with `herdr-core`/`hc ls --all --json`; un-windowed terminals get
-  synthetic `hc-core:<address>` spaces that MUST be appended to
-  `snap.Spaces` — the phone renders core terminals from spaces, not agents.
+  is the inventory; `herdr-core`/`hc ls --all --json` only fills in when
+  the window is unreachable (`state=="live"` entries get synthetic
+  `hc-core:<address>` spaces that MUST be appended to `snap.Spaces` — the
+  phone renders core terminals from spaces, not agents). `hc ls` counts
+  detached workers and finished shells as terminals — merging them while
+  the window is open renders dead processes as cards.
 - hc pane ids are `hc:<address>`; `server.go` intercepts them before the
   action switch and `dispatchHcCommand` (`internal/app/hc.go`) routes
   reads/watches/sends/keys through the hc CLI. hc panes carry
