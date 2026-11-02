@@ -360,9 +360,12 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .app-header nav .view-toggle { color: var(--primary); font-size: 1rem; }
 .hc-brand { color: var(--primary); display: inline-flex; }
 .launch-head { align-items: center; display: flex; justify-content: space-between; gap: .5rem; }
-.launch-head h2 { margin: 0; }
-.app-header.home-header > .status-dot { margin-inline-start: 1rem; }
-.header-title { display: flex; flex: 1; flex-direction: row; align-items: baseline; justify-content: space-between; gap: .45rem; min-width: 0; }
+.app-header.home-header > .status-dot { flex: 0 0 auto; margin-inline-start: 1rem; }
+/* The brand + relay count never shrink: when the icon row outgrows the
+   width, the nav's overflow-x:auto takes the overflow — the reader swipes
+   icons, never loses the herdr logo or lanes. */
+.header-title { display: flex; flex: 1 0 auto; flex-direction: row; align-items: baseline; justify-content: space-between; gap: .45rem; min-width: 0; }
+.agent-count { flex: 0 0 auto; }
 .header-brand { align-items: center; display: flex; gap: .45rem; min-width: 0; }
 .header-brand .brand-logo { color: var(--foreground); flex: 0 0 auto; }
 .header-title h1 { font-size: 1rem; line-height: 1.2; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

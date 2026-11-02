@@ -96,6 +96,14 @@
   phone renders core terminals from spaces, not agents). `hc ls` counts
   detached workers and finished shells as terminals — merging them while
   the window is open renders dead processes as cards.
+- `hc_launch` mounts a tab+terminal in the open window: `handleHcLaunch`
+  resolves `profile_id` through `profiles.Resolver.Profile().Argv` (same
+  catalog as `agent_start`), then `Client.TabNew`. **`tab.new` lands in the
+  app's SELECTED space, which can live on a remote machine** — always pass
+  `hc.LocalSpaceID` (a `Machine == nil` space, active first); empty →
+  `space.new` which defaults to the local machine (`--tab` names it, not
+  `--name`). Capability `hc_launch` rides the same `hcW != nil` gate as
+  `hc_view`.
 - hc pane ids are `hc:<address>`; `server.go` intercepts them before the
   action switch and `dispatchHcCommand` (`internal/app/hc.go`) routes
   reads/watches/sends/keys through the hc CLI. hc panes carry
