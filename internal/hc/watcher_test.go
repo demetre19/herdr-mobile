@@ -1,6 +1,11 @@
 package hc
 
 import (
+	"context"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/0cv/herdr-mobile-relay/internal/coordinator"
@@ -83,6 +88,92 @@ func TestBusyTitleDetectsBrailleSpinner(t *testing.T) {
 	if BusyTitle("plain title") || BusyTitle("") {
 		t.Fatal("false positive on plain title")
 	}
+}
+
+// fakeHcBins writes script binaries that answer the CLI calls the watcher
+// makes: `herdr-app ls`, `herdr-core server status|ls|get`.
+func fakeHcBins(t *testing.T, appScript, coreScript string) *Client {
+	t.Helper()
+	dir := t.TempDir()
+	app := filepath.Join(dir, "herdr-app")
+	core := filepath.Join(dir, "herdr-core")
+	if err := os.WriteFile(app, []byte(appScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(core, []byte(coreScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return NewClient(app, core)
+}
+
+func TestPollShowsOnlyMountedTerminalsWhenWindowOpen(t *testing.T) {
+	// The bug: hc ls lists detached workers + finished shells the window
+	// never mounted, and the phone rendered them all as "Core terminals".
+	// Only the mounted t11 may appear while the window answers.
+	app := `#!/bin/sh
+cat <<'EOF'
+{"spaces":[{"id":"sp1","name":"~","folder":"/Users/apple","machine":null,"active":true,"tabs":[{"id":"tb1","name":"1","active":true,"settled":false,"terminals":[{"terminal":"t11","pane":"p1","status":"idle","app":"zsh","name":null,"sub_agents":[]}]}]}]}
+EOF`
+	core := `#!/bin/sh
+case "$1" in
+server) echo '{"core":{"id":"c1","name":"mac-mini"},"version":"0.1.16"}' ;;
+ls) echo '{"machines":[{"name":"macbookpro-codex","state":"connected"}],"terminals":[
+	{"address":"t1","agent":"hc","cwd":"/Users/apple","name":"add-jump","state":"live"},
+	{"address":"t11","agent":"zsh","cwd":"/Users/apple","state":"live"},
+	{"address":"t12","agent":"zsh","cwd":"/Users/apple","state":"finished"},
+	{"address":"macbookpro-codex/t1s","agent":"omp","cwd":"/Users/apple","state":"live"}]}' ;;
+get) echo '{"address":"'$2'","agent":"zsh","cwd":"/Users/apple","state":"live","title":""}' ;;
+esac`
+	w := NewWatcher(fakeHcBins(t, app, core), "mac-mini", slog.Default())
+	w.poll(context.Background())
+
+	snap := w.Current()
+	if len(snap.Agents) != 1 || snap.Agents[0].TerminalID != "t11" {
+		t.Fatalf("agents = %v, want only mounted t11", paneIDs(snap.Agents))
+	}
+	for _, space := range snap.Spaces {
+		if strings.HasPrefix(space.ID, "hc-core:") {
+			t.Fatalf("synthetic core space leaked into an open-window snapshot: %v", snap.Spaces)
+		}
+	}
+	if len(snap.Machines) != 1 || snap.Machines[0] != "macbookpro-codex" {
+		t.Fatalf("machines = %v", snap.Machines)
+	}
+}
+
+func TestPollCoreFallbackWhenWindowClosed(t *testing.T) {
+	// herdr-app fails (window closed) → live core terminals become the
+	// inventory; finished ones are still noise.
+	app := "#!/bin/sh\nexit 1"
+	core := `#!/bin/sh
+case "$1" in
+server) echo '{"core":{"id":"c1","name":"mac-mini"},"version":"0.1.16"}' ;;
+ls) echo '{"machines":[],"terminals":[
+	{"address":"t1","agent":"hc","cwd":"/Users/apple","name":"add-jump","state":"live"},
+	{"address":"t12","agent":"zsh","cwd":"/Users/apple","state":"finished"}]}' ;;
+get) echo '{"address":"'$2'","agent":"hc","cwd":"/Users/apple","state":"live"}' ;;
+esac`
+	w := NewWatcher(fakeHcBins(t, app, core), "mac-mini", slog.Default())
+	w.poll(context.Background())
+
+	snap := w.Current()
+	if len(snap.Agents) != 1 || snap.Agents[0].TerminalID != "t1" {
+		t.Fatalf("agents = %v, want live-only [t1]", paneIDs(snap.Agents))
+	}
+	if len(snap.Spaces) != 1 || snap.Spaces[0].ID != "hc-core:t1" {
+		t.Fatalf("spaces = %v, want [hc-core:t1]", snap.Spaces)
+	}
+	if snap.Message == "" {
+		t.Fatal("window-closed message missing")
+	}
+}
+
+func paneIDs(agents []*coordinator.AgentState) []string {
+	ids := make([]string, 0, len(agents))
+	for _, a := range agents {
+		ids = append(ids, a.TerminalID)
+	}
+	return ids
 }
 
 func TestSnapshotFingerprintDetectsVisibleChanges(t *testing.T) {
