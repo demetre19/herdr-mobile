@@ -1728,6 +1728,7 @@ class RelayStore {
       state: String(message.state || 'ready'),
       message: typeof message.message === 'string' ? message.message : '',
       server_id: String(message.server_id || ''),
+      machines: Array.isArray(message.machines) ? message.machines.map(String) : [],
       spaces: Array.isArray(message.spaces) ? message.spaces : [],
       agents: incoming,
       last_attempt_at: typeof message.last_attempt_at === 'number' ? message.last_attempt_at : 0,
