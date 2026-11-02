@@ -672,6 +672,7 @@
     <div class="header-title">
       <div class="header-brand">
         {#if headerTitle === 'herdr'}<span class:hc-brand={$currentView.view === 'hc'}><BrandLogo size={20} /></span>{/if}<h1>{headerTitle}</h1>
+        {#if activeAgent?.pane_id?.startsWith('hc:')}<span class="hc-pane-badge" title="Herdr App terminal">▣</span>{/if}
       </div>
       {#if headerMeta}<span>{headerMeta}</span>{/if}
     </div>
