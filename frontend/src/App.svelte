@@ -22,7 +22,6 @@
   import { agentOpeningView, hasConversationHistory } from '$lib/agent-view';
   import { activityForNotification } from '$lib/activity';
   import {
-    agentContextLabel,
     agentNeedsInspection,
     agentNeedsResponse,
     agentStatusGroup,
@@ -74,7 +73,6 @@
   const connections = relayStore.connections;
   const agents = relayStore.agents;
   const hcAgents = relayStore.hcAgents;
-  const hcInventories = relayStore.hcInventories;
   const workspaces = relayStore.workspaces;
   const activities = relayStore.activities;
   const frames = relayStore.terminalFrames;
@@ -754,28 +752,15 @@
         </Button>
         {/if}
         {#if hcAvailable}
-        <span class="view-toggle" role="group" aria-label="Agent list source">
-          <Button
-            class="view-toggle-button"
-            variant="ghost"
-            size="icon"
-            aria-label="Legacy Herdr view"
-            title="Legacy Herdr view"
-            aria-pressed={$currentView.view === 'agents'}
-            data-active={$currentView.view === 'agents'}
-            onclick={() => replaceView({ view: 'agents' })}
-          >⌘</Button>
-          <Button
-            class="view-toggle-button"
-            variant="ghost"
-            size="icon"
-            aria-label="Herdr App view"
-            title="Herdr App view"
-            aria-pressed={$currentView.view === 'hc'}
-            data-active={$currentView.view === 'hc'}
-            onclick={() => replaceView({ view: 'hc' })}
-          >▣</Button>
-        </span>
+        <Button
+          class="view-toggle"
+          variant="ghost"
+          size="icon"
+          aria-label={$currentView.view === 'hc' ? 'Switch to legacy Herdr view' : 'Switch to Herdr App view'}
+          title={$currentView.view === 'hc' ? 'Switch to legacy Herdr view' : 'Switch to Herdr App view'}
+          aria-pressed={$currentView.view === 'hc'}
+          onclick={() => replaceView({ view: $currentView.view === 'hc' ? 'agents' : 'hc' })}
+        ><span class="view-toggle-glyph" data-active={$currentView.view !== 'hc'}>⌘</span><span class="view-toggle-glyph" data-active={$currentView.view === 'hc'}>▣</span></Button>
         {/if}
       {/if}
       <span class="nav-button-shell">

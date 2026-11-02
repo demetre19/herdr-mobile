@@ -346,19 +346,21 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   z-index: 30;
   backdrop-filter: blur(14px);
 }
-.app-header nav { display: flex; gap: .15rem; margin-left: auto; }
+.app-header nav { display: flex; flex: 0 1 auto; gap: .05rem; margin-left: auto; min-width: 0; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.app-header nav::-webkit-scrollbar { display: none; }
+.app-header nav > * { flex: 0 0 auto; }
 /* Terminal view carries five controls beside the title on a 390px line, so the
    header's own buttons run tighter than the 2.65rem default to leave the agent
    name readable. Still a 34px target. */
 .app-header nav .button-icon { height: 2.45rem; min-height: 2.45rem; width: 2.45rem; }
 .nav-button-shell { display: inline-flex; position: relative; }
 .nav-update-badge { background: var(--warning); border: 2px solid var(--background); border-radius: 50%; height: .62rem; pointer-events: none; position: absolute; right: .16rem; top: .16rem; width: .62rem; }
-/* Legacy/App list-source toggle: a slim segmented pair that only renders when
-   a connected relay advertises hc_view. */
-.view-toggle { align-items: center; border: 1px solid var(--border); border-radius: .6rem; display: inline-flex; overflow: hidden; }
-.view-toggle .view-toggle-button { border-radius: 0; color: var(--muted); font-size: .85rem; height: 2.1rem; min-height: 2.1rem; width: 2.35rem; }
-.view-toggle .view-toggle-button + .view-toggle-button { border-inline-start: 1px solid var(--border); }
-.view-toggle .view-toggle-button[data-active="true"] { background: var(--card); color: var(--foreground); }
+/* Legacy/App list-source toggle: ONE button carrying both glyphs — tap flips
+   the view, the lit glyph marks the active source. */
+.app-header nav .view-toggle { height: 2.45rem; min-height: 2.45rem; padding: 0 .45rem; width: auto; }
+.view-toggle-glyph { color: var(--muted); font-size: .95rem; line-height: 1; }
+.view-toggle-glyph + .view-toggle-glyph { border-inline-start: 1px solid var(--border); margin-inline-start: .45rem; padding-inline-start: .45rem; }
+.view-toggle-glyph[data-active="true"] { color: var(--foreground); }
 .app-header.home-header > .status-dot { margin-inline-start: 1rem; }
 .header-title { display: flex; flex: 1; flex-direction: row; align-items: baseline; justify-content: space-between; gap: .45rem; min-width: 0; }
 .header-brand { align-items: center; display: flex; gap: .45rem; min-width: 0; }
