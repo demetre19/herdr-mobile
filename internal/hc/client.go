@@ -454,7 +454,9 @@ func (c *Client) ReadStyled(ctx context.Context, address string, lines int) ([]b
 	}
 }
 
-// lockedBuffer is a capped, mutex-guarded Write sink for the attach replay.
+// lockedBuffer keeps the LAST `cap` bytes written (the newest part of the
+// replay — the current screen), dropping the oldest from the head. A head
+// cap would deliver the beginning of history and lose the live screen.
 type lockedBuffer struct {
 	mu  *sync.Mutex
 	buf *bytes.Buffer
@@ -464,27 +466,24 @@ type lockedBuffer struct {
 func (w *lockedBuffer) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.buf.Len()+len(p) > w.cap {
-		remaining := w.cap - w.buf.Len()
-		if remaining <= 0 {
-			return len(p), nil
-		}
-		w.buf.Write(p[:remaining])
-		return len(p), nil
-	}
 	w.buf.Write(p)
+	if over := w.buf.Len() - w.cap; over > 0 {
+		w.buf.Next(over)
+	}
 	return len(p), nil
 }
 
 // ReadStyled limits: the replay bursts fast, then live output trickles —
 // quiet means "the screen is fully painted". 4s of silence covers a slow
-// remote hop; the 12s outer deadline bounds attach+collection for a dead
-// core; 2MiB bounds scrollback on an --observe stream.
+// remote hop; the 8s outer deadline bounds attach+collection for a dead
+// core; the byte cap keeps one collect well under the phone's ~4MiB
+// outbound-message budget once JSON-escaped (a multi-megabyte replay used
+// to fill the client send buffer and evict it on connect).
 const (
-	styledReadQuietAfter = 1500 * time.Millisecond
+	styledReadQuietAfter = 1200 * time.Millisecond
 	styledReadFirstByte  = 4 * time.Second
-	styledReadMaxWait    = 12 * time.Second
-	styledReadMaxBytes   = 2 << 20
+	styledReadMaxWait    = 8 * time.Second
+	styledReadMaxBytes   = 512 << 10
 	styledReadHistoryMax = 500
 )
 
