@@ -756,11 +756,11 @@
           class="view-toggle"
           variant="ghost"
           size="icon"
-          aria-label={$currentView.view === 'hc' ? 'Switch to legacy Herdr view' : 'Switch to Herdr App view'}
-          title={$currentView.view === 'hc' ? 'Switch to legacy Herdr view' : 'Switch to Herdr App view'}
+          aria-label={$currentView.view === 'hc' ? 'Herdr App view — tap for legacy Herdr view' : 'Legacy Herdr view — tap for Herdr App view'}
+          title={$currentView.view === 'hc' ? 'Herdr App view — tap for legacy Herdr view' : 'Legacy Herdr view — tap for Herdr App view'}
           aria-pressed={$currentView.view === 'hc'}
           onclick={() => replaceView({ view: $currentView.view === 'hc' ? 'agents' : 'hc' })}
-        ><span class="view-toggle-glyph" data-active={$currentView.view !== 'hc'}>⌘</span><span class="view-toggle-glyph" data-active={$currentView.view === 'hc'}>▣</span></Button>
+        >{$currentView.view === 'hc' ? '▣' : '⌘'}</Button>
         {/if}
       {/if}
       <span class="nav-button-shell">
