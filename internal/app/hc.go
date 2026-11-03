@@ -202,9 +202,12 @@ func (s *Server) hcReadPane(ctx context.Context, message map[string]any) map[str
 	}
 	var content string
 	var err error
-	if format == "ansi" {
+	if format == "ansi" && !strings.Contains(hcAddress(paneID), "/") {
 		content, err = s.hcStyledContent(ctx, hcAddress(paneID), lines)
 	} else {
+		// Remote-machine addresses (machine/addr) attach over federation —
+		// the observe replay bursts for seconds before first paint, so the
+		// fast plain read is the right frame there.
 		content, err = s.hcC.Read(ctx, hcAddress(paneID), lines)
 	}
 	if err != nil {

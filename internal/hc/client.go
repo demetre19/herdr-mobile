@@ -5,6 +5,7 @@
 package hc
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -554,4 +555,80 @@ func (c *Client) Keys(ctx context.Context, address string, keys []string) error 
 	args := append([]string{"keys", address}, keys...)
 	_, err := c.run(ctx, c.CoreBin, args...)
 	return err
+}
+
+// CoreEvent is one fact change on the `hc events` stream. A nil Event with
+// non-empty Snapshot is the initial full inventory; subsequent lines are
+// JSON-RPC notifications (title/state/exit/… deltas per terminal).
+type CoreEvent struct {
+	// Snapshot carries the full terminal records on the connect frame only.
+	Snapshot []CoreTerminal
+	// Terminal is the address an incremental event applies to.
+	Terminal string
+	// Type is the event kind (title, state, exit, …) — opaque to hc itself.
+	Type string
+	// Title is set for type=="title" events (the only in-place patch).
+	Title string
+	// Seq is the core's ordering counter.
+	Seq int64
+}
+
+// Events streams `hc events --json`: one full snapshot frame followed by
+// per-change JSON-RPC notifications. The handler runs on the scanner
+// goroutine, so it must not block. Events returns when the stream ends or
+// ctx is cancelled — callers restart it to keep the feed alive.
+func (c *Client) Events(ctx context.Context, handler func(CoreEvent)) error {
+	cmd := exec.CommandContext(ctx, c.CoreBin, "events", "--json")
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("hc events: %w", err)
+	}
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("hc events: %w", err)
+	}
+	scanner := bufio.NewScanner(pipe)
+	scanner.Buffer(make([]byte, 0, 256<<10), 8<<20)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var head struct {
+			Method    string            `json:"method"`
+			Terminals []json.RawMessage `json:"terminals"`
+			Params    *struct {
+				Type     string          `json:"type"`
+				Terminal string          `json:"terminal"`
+				Seq      int64           `json:"seq"`
+				Data     json.RawMessage `json:"data"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(line, &head); err != nil {
+			continue
+		}
+		switch {
+		case head.Method == "event" && head.Params != nil:
+			event := CoreEvent{Type: head.Params.Type, Terminal: head.Params.Terminal, Seq: head.Params.Seq}
+			if event.Type == "title" && head.Params.Data != nil {
+				var data struct {
+					Title string `json:"title"`
+				}
+				if err := json.Unmarshal(head.Params.Data, &data); err == nil {
+					event.Title = data.Title
+				}
+			}
+			handler(event)
+		case head.Terminals != nil:
+			event := CoreEvent{Snapshot: make([]CoreTerminal, 0, len(head.Terminals))}
+			for _, raw := range head.Terminals {
+				var term CoreTerminal
+				if err := json.Unmarshal(raw, &term); err == nil && term.Address != "" {
+					event.Snapshot = append(event.Snapshot, term)
+				}
+			}
+			handler(event)
+		}
+	}
+	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
+		return fmt.Errorf("hc events: %w", err)
+	}
+	return nil
 }

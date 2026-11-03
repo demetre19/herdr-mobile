@@ -243,3 +243,123 @@ func TestTabNewPinsSpaceAndRunsDo(t *testing.T) {
 		t.Fatalf("space.new args:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestPollGroupsLabeledTerminalsWhenWindowClosed(t *testing.T) {
+	// Window unreachable → flat hc inventory; but the events stream's full
+	// records carry herdr.space/herdr.tab labels, so mounted terminals
+	// must regroup into their real space/tab instead of Core terminals.
+	app := "#!/bin/sh\nexit 1"
+	core := `#!/bin/sh
+case "$1" in
+server) echo '{"core":{"id":"c1","name":"mac-mini"},"version":"0.1.16"}' ;;
+ls) echo '{"machines":[],"terminals":[
+	{"address":"t2f","agent":"omp","cwd":"/Users/apple/Developer/of-machinery","name":"boss","state":"live"},
+	{"address":"t9g","agent":"omp","cwd":"/Users/apple/Developer/of-machinery","name":"lane","state":"live"},
+	{"address":"t1","agent":"hc","cwd":"/Users/apple","name":"add-jump","state":"live"}]}' ;;
+get) echo '{"address":"'$2'","agent":"omp","cwd":"/Users/apple","state":"live"}' ;;
+esac`
+	w := NewWatcher(fakeHcBins(t, app, core), "mac-mini", slog.Default())
+	w.onCoreEvent(CoreEvent{Snapshot: []CoreTerminal{
+		{Address: "t2f", State: "live", Status: TerminalStatus{State: "working", App: "omp"},
+			Labels: map[string]string{
+				"herdr.space": "spa1", "herdr.tab": "tb1",
+				"ofm.tab_label": "THE BOSS", "where": "of-machinery / THE BOSS"}},
+		{Address: "t9g", State: "live", Status: TerminalStatus{State: "working", App: "omp"},
+			Labels: map[string]string{
+				"herdr.space": "spa1", "herdr.tab": "tb2",
+				"ofm.tab_label": "L706", "where": "of-machinery / L706"}},
+		{Address: "t1", State: "live", Name: "add-jump"},
+	}})
+	w.poll(context.Background())
+
+	snap := w.Current()
+	// Labeled terminals must land in ONE synthesized space with two tabs.
+	var space *Space
+	for i := range snap.Spaces {
+		if snap.Spaces[i].ID == "spa1" {
+			space = &snap.Spaces[i]
+		}
+	}
+	if space == nil {
+		t.Fatalf("no labeled space in snapshot: %+v", snap.Spaces)
+	}
+	if space.Name != "of-machinery" || len(space.Tabs) != 2 {
+		t.Fatalf("space = %+v", space)
+	}
+	names := map[string]bool{space.Tabs[0].Name: true, space.Tabs[1].Name: true}
+	if !names["L706"] || !names["THE BOSS"] {
+		t.Fatalf("tabs = %+v", space.Tabs)
+	}
+	// The label-less worker stays in Core terminals.
+	var coreSpace bool
+	for _, sp := range snap.Spaces {
+		if sp.ID == "hc-core:t1" {
+			coreSpace = true
+		}
+	}
+	if !coreSpace {
+		t.Fatalf("unlabeled worker lost: %+v", snap.Spaces)
+	}
+	// Agents carry the synthesized workspace/tab identity.
+	byTerm := map[string]*coordinator.AgentState{}
+	for _, a := range snap.Agents {
+		byTerm[a.TerminalID] = a
+	}
+	if byTerm["t2f"].WorkspaceID != "spa1" || byTerm["t2f"].TabID != "tb1" ||
+		byTerm["t2f"].TabLabel != "THE BOSS" || byTerm["t2f"].SessionName != "of-machinery" {
+		t.Fatalf("t2f agent = %+v", byTerm["t2f"])
+	}
+	if byTerm["t9g"].TabID != "tb2" {
+		t.Fatalf("t9g agent = %+v", byTerm["t9g"])
+	}
+}
+
+func TestEventStorePatchesTitlesAndDirtiesOthers(t *testing.T) {
+	w := NewWatcher(&Client{}, "mac-mini", slog.Default())
+	w.wake = make(chan struct{}, 1)
+	w.onCoreEvent(CoreEvent{Snapshot: []CoreTerminal{
+		{Address: "t1", State: "live", Title: "old"},
+	}})
+	w.onCoreEvent(CoreEvent{Type: "title", Terminal: "t1", Title: "new"})
+	if got := w.records["t1"].Title; got != "new" {
+		t.Fatalf("title patch = %q", got)
+	}
+	w.onCoreEvent(CoreEvent{Type: "status", Terminal: "t1"})
+	if !w.dirtyAddrs["t1"] {
+		t.Fatal("status event did not dirty the record")
+	}
+}
+
+func TestPollUsesStreamRecordsWithoutGet(t *testing.T) {
+	// With the stream live, poll must read chips/status from the record
+	// store and never shell out to `hc get` (the fake would fail it).
+	app := "#!/bin/sh\nexit 1"
+	core := `#!/bin/sh
+case "$1" in
+server) echo '{"core":{"id":"c1","name":"m"},"version":"0.1.16"}' ;;
+ls) echo '{"machines":[],"terminals":[]}' ;;
+get) exit 1 ;;
+esac`
+	w := NewWatcher(fakeHcBins(t, app, core), "m", slog.Default())
+	w.onCoreEvent(CoreEvent{Snapshot: []CoreTerminal{{
+		Address: "t2f", State: "live",
+		Status: TerminalStatus{State: "working", App: "omp"},
+		Argv:   []string{"/usr/bin/env", "OFM_ROLE=boss", "/bin/zsh", "-l"},
+		Foreground: &struct {
+			Argv []string `json:"argv"`
+			Name string   `json:"name"`
+		}{Argv: []string{"omp", "--model", "pi/slow"}, Name: "omp"},
+		Labels: map[string]string{"herdr.space": "spa1", "herdr.tab": "tb1",
+			"ofm.tab_label": "THE BOSS", "where": "of-machinery / THE BOSS"},
+	}}})
+	w.poll(context.Background())
+
+	snap := w.Current()
+	if len(snap.Agents) != 1 {
+		t.Fatalf("agents = %v", paneIDs(snap.Agents))
+	}
+	a := snap.Agents[0]
+	if a.Status != "working" || a.AgentRole != "slow" || a.TabLabel != "THE BOSS" {
+		t.Fatalf("agent = status:%q role:%q tab:%q", a.Status, a.AgentRole, a.TabLabel)
+	}
+}

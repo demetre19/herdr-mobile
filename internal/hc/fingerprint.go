@@ -11,12 +11,19 @@ func snapshotFingerprint(s Snapshot) string {
 	type agentKey struct {
 		PaneID      string `json:"p"`
 		Status      string `json:"st"`
+		TabID       string `json:"ti"`
 		TabLabel    string `json:"tl"`
 		WorkspaceID string `json:"w"`
+		SessionName string `json:"sn"`
 		Agent       string `json:"a"`
 		Name        string `json:"n"`
 		Cwd         string `json:"c"`
 		Focused     bool   `json:"f"`
+		Role        string `json:"r"`
+		Model       string `json:"m"`
+		Effort      string `json:"e"`
+		Attention   string `json:"at"`
+		Prompt      string `json:"pr"`
 	}
 	agents := make([]agentKey, 0, len(s.Agents))
 	for _, a := range s.Agents {
@@ -24,9 +31,12 @@ func snapshotFingerprint(s Snapshot) string {
 			continue
 		}
 		agents = append(agents, agentKey{
-			PaneID: a.PaneID, Status: a.Status, TabLabel: a.TabLabel,
-			WorkspaceID: a.WorkspaceID, Agent: a.Agent, Name: a.Name,
+			PaneID: a.PaneID, Status: a.Status, TabID: a.TabID,
+			TabLabel: a.TabLabel, WorkspaceID: a.WorkspaceID,
+			SessionName: a.SessionName, Agent: a.Agent, Name: a.Name,
 			Cwd: a.Cwd, Focused: a.Focused,
+			Role: a.AgentRole, Model: a.AgentModel, Effort: a.AgentEffort,
+			Attention: string(a.AttentionKind), Prompt: a.Prompt,
 		})
 	}
 	encoded, err := json.Marshal(struct {

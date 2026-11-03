@@ -1,7 +1,7 @@
 import type { Agent, FrontendTargetRef, TargetRef } from './types';
 
 const ROUTE_PREFIX = 'r3.';
-const ID_PATTERN = /^[A-Za-z0-9._:@%+-]{1,160}$/u;
+const ID_PATTERN = /^[A-Za-z0-9._:@%+/\-]{1,160}$/u;
 const TARGET_TUPLE_LENGTH = 7;
 
 type TargetTuple = [3, string, string, string, string, number, string];

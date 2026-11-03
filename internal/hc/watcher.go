@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -45,13 +46,40 @@ type Watcher struct {
 	// metaStates caches per-terminal session-JSONL meta (role/model/effort)
 	// so unchanged files never re-read and remote resolves throttle.
 	metaStates map[string]*sessionMetaState
+	// records is the live terminal store fed by `hc events` — the core's
+	// own inventory primitive. While streamLive, polls read these full
+	// records (labels, foreground, status) instead of per-terminal `hc get`.
+	records    map[string]*CoreTerminal
+	dirtyAddrs map[string]bool
+	streamLive bool
+	// pollMu serializes interval ticks and event-wake polls.
+	pollMu  sync.Mutex
+	// wake fires poll ahead of the interval after any event, debounced so a
+	// spinner-title burst collapses into one rebuild.
+	wake       chan struct{}
+	wakeTimer  *time.Timer
+	lastPoll   time.Time
+	// wakeMu covers wakeTimer/lastPoll (the AfterFunc fires off the Run
+	// goroutine).
+	wakeMu sync.Mutex
 }
+
+const (
+	// wakeDebounce collapses event bursts into one poll.
+	wakeDebounce = 400 * time.Millisecond
+	// wakeMinInterval floors event-driven poll frequency — a busy fleet
+	// emits hundreds of title ticks per minute, each one a wake.
+	wakeMinInterval = 2 * time.Second
+)
+
 
 func NewWatcher(client *Client, hostname string, logger *slog.Logger) *Watcher {
 	return &Watcher{
 		client:   client,
 		hostname: hostname,
 		interval: 5 * time.Second,
+		records:    map[string]*CoreTerminal{},
+		dirtyAddrs: map[string]bool{},
 		logger:   logger,
 	}
 }
@@ -89,6 +117,8 @@ func (w *Watcher) Agent(paneID string) (*coordinator.AgentState, bool) {
 // Run polls until ctx ends. Poll failures keep the last good snapshot but mark
 // availability false only when both the window and the core are unreachable.
 func (w *Watcher) Run(ctx context.Context) {
+	w.wake = make(chan struct{}, 1)
+	go w.runEvents(ctx)
 	w.poll(ctx)
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
@@ -96,21 +126,110 @@ func (w *Watcher) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-w.wake:
+			// Debounce: a wake timer re-polls once the burst settles,
+			// floored so a fleet of title ticks polls at most every
+			// wakeMinInterval.
+			w.wakeMu.Lock()
+			if w.wakeTimer != nil {
+				w.wakeMu.Unlock()
+				continue
+			}
+			delay := wakeDebounce
+			if since := time.Since(w.lastPoll); since < wakeMinInterval {
+				delay = wakeMinInterval - since
+			}
+			w.wakeTimer = time.AfterFunc(delay, func() {
+				w.wakeMu.Lock()
+				w.wakeTimer = nil
+				w.wakeMu.Unlock()
+				w.poll(ctx)
+			})
+			w.wakeMu.Unlock()
 		case <-ticker.C:
 			w.poll(ctx)
 		}
 	}
 }
 
+// runEvents keeps the `hc events` feed alive, restarting after drops. The
+// stream is the core's single source of full terminal records — labels,
+// foreground argv, status — so while it is live no per-terminal `hc get`
+// is needed at all.
+func (w *Watcher) runEvents(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		err := w.client.Events(ctx, w.onCoreEvent)
+		w.mu.Lock()
+		w.streamLive = false
+		w.mu.Unlock()
+		if ctx.Err() != nil {
+			return
+		}
+		w.logger.Warn("hc events stream dropped; restarting", "error", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// onCoreEvent maintains the live terminal store. The connect frame replaces
+// it wholesale; title events patch in place; every other event kind marks
+// the terminal dirty so the next poll re-reads its full record once.
+func (w *Watcher) onCoreEvent(event CoreEvent) {
+	w.mu.Lock()
+	if event.Snapshot != nil {
+		if w.records == nil {
+			w.records = map[string]*CoreTerminal{}
+		}
+		for i := range event.Snapshot {
+			term := event.Snapshot[i]
+			w.records[term.Address] = &term
+		}
+		w.streamLive = true
+	} else if w.streamLive {
+		if rec := w.records[event.Terminal]; rec != nil && event.Type == "title" {
+			rec.Title = event.Title
+		} else if event.Terminal != "" && w.dirtyAddrs != nil {
+			w.dirtyAddrs[event.Terminal] = true
+		}
+	}
+	w.mu.Unlock()
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
 func (w *Watcher) poll(ctx context.Context) {
+	w.pollMu.Lock()
+	defer w.pollMu.Unlock()
 	now := time.Now().Unix()
 	snap := Snapshot{LastAttempt: now}
+
+	// The hc events stream is the primary inventory: one connect frame
+	// carries every terminal's FULL record (labels, foreground argv,
+	// status), and incremental events keep it fresh. Copy it under the
+	// lock, then poll without the lock held.
+	w.mu.Lock()
+	streamLive := w.streamLive
+	records := w.records
+	dirty := w.dirtyAddrs
+	w.dirtyAddrs = map[string]bool{}
+	w.wakeMu.Lock()
+	w.lastPoll = time.Now()
+	w.wakeMu.Unlock()
+	w.mu.Unlock()
 
 	serverID, serverErr := w.client.ServerID(ctx)
 	spaces, topoErr := w.client.Topology(ctx)
 	terminals, machines, termErr := w.client.Terminals(ctx)
 
-	if serverErr != nil && termErr != nil {
+	if serverErr != nil && termErr != nil && !streamLive {
 		snap.Available = false
 		snap.Message = "Herdr App core is not running"
 		w.commit(snap)
@@ -121,13 +240,46 @@ func (w *Watcher) poll(ctx context.Context) {
 	if topoErr != nil {
 		snap.Message = "Herdr App window is closed; showing core terminals"
 	}
+	// Machine names come from `hc ls`; when it fails mid-stream the remote
+	// address prefixes ("machine/addr") supply them instead.
+	if streamLive {
+		merged := append([]string{}, machines...)
+		seen := map[string]bool{}
+		for _, m := range merged {
+			seen[m] = true
+		}
+		for addr := range records {
+			if slash := strings.IndexByte(addr, '/'); slash > 0 {
+				if m := addr[:slash]; !seen[m] {
+					seen[m] = true
+					merged = append(merged, m)
+				}
+			}
+		}
+		machines = merged
+	}
 	snap.Machines = machines
 	snap.Spaces = spaces
 	snap.LastSuccess = now
 
 	byAddress := map[string]*CoreTerminal{}
-	for i := range terminals {
-		byAddress[terminals[i].Address] = &terminals[i]
+	labelsByAddr := map[string]map[string]string{}
+	if streamLive {
+		for addr, rec := range records {
+			byAddress[addr] = rec
+			if len(rec.Labels) > 0 {
+				labelsByAddr[addr] = rec.Labels
+			}
+		}
+		terminals = terminals[:0]
+		for _, rec := range records {
+			terminals = append(terminals, *rec)
+		}
+		sort.Slice(terminals, func(i, j int) bool { return terminals[i].Address < terminals[j].Address })
+	} else {
+		for i := range terminals {
+			byAddress[terminals[i].Address] = &terminals[i]
+		}
 	}
 	seen := map[string]bool{}
 	var agents []*coordinator.AgentState
@@ -144,7 +296,7 @@ func (w *Watcher) poll(ctx context.Context) {
 	// The app view mirrors what the window mounts — detached core workers
 	// (hc's own add-* jobs, finished shells) must NOT appear alongside real
 	// spaces; hc ls still lists them as "live" long after their work ended.
-	// `hc ls` remains the fallback ONLY for a closed/unreachable window, and
+	// The flat fallback only runs for a closed/unreachable window, and
 	// even then finished terminals are noise, not content.
 	if topoErr != nil {
 		for i := range terminals {
@@ -162,20 +314,32 @@ func (w *Watcher) poll(ctx context.Context) {
 			agents = append(agents, agentRecord(w.hostname, serverID, space, space.Tabs[0], term, t))
 		}
 	}
-	// The window reports status; the compact `hc ls` record does not. Fetch
-	// full records (bounded) so un-windowed and still-live terminals get a
-	// real working/idle status and their live title.
+	// The events stream already delivers full records; `hc get` is only the
+	// fallback — for terminals missing from the stream snapshot, marked
+	// dirty by a non-title event, or every poll when the stream is down
+	// (bounded, since ls carries no status).
 	const getLimit = 24
 	fetched := 0
 	for _, a := range agents {
-		if fetched >= getLimit {
-			break
+		full := byAddress[a.TerminalID]
+		needsGet := full == nil || dirty[a.TerminalID] || !streamLive
+		if needsGet {
+			if fetched >= getLimit {
+				continue
+			}
+			fetched++
+			got, err := w.client.Get(ctx, a.TerminalID)
+			if err != nil {
+				continue
+			}
+			full = got
 		}
-		full, err := w.client.Get(ctx, a.TerminalID)
-		if err != nil {
+		if full == nil {
 			continue
 		}
-		fetched++
+		if len(full.Labels) > 0 {
+			labelsByAddr[full.Address] = full.Labels
+		}
 		if full.Status.State != "" {
 			a.Status = full.Status.State
 		} else if a.Status == "idle" && BusyTitle(full.Title) {
@@ -211,6 +375,14 @@ func (w *Watcher) poll(ctx context.Context) {
 		a.AgentRole = role
 		a.AgentModel = model
 		a.AgentEffort = effort
+	}
+
+	// Re-group label-carrying terminals into their real spaces when the
+	// window is unreachable (they were created as per-terminal core
+	// cards). herdr.space/herdr.tab come from the window when the space
+	// was mounted; `where` ("<space> / <tab>") supplies names.
+	if topoErr != nil {
+		snap.Spaces = regroupLabeledTerminals(snap.Spaces, agents, labelsByAddr)
 	}
 	// Idle omp-shaped terminals might be sitting on a question/approval —
 	// hc reports no attention state, so the same parser the legacy lane
@@ -257,6 +429,99 @@ func (w *Watcher) poll(ctx context.Context) {
 	}
 	snap.Agents = agents
 	w.commit(snap)
+}
+
+// regroupLabeledTerminals rebuilds window-faithful space/tab groups from
+// terminal labels when the app window is unreachable. Agents synthesized
+// as flat hc-core cards that carry herdr.space move into a shared space
+// group keyed on the space id; tab rows come from herdr.tab/ofm.tab_label
+// and the space name from the `where` label's left half. Label-less
+// workers (hc's own add-* jobs) keep the flat Core terminals bucket.
+func regroupLabeledTerminals(
+	spaces []Space,
+	agents []*coordinator.AgentState,
+	labelsByAddr map[string]map[string]string,
+) []Space {
+	type tabGroup struct {
+		label string
+		addrs []string
+	}
+	var spaceOrder []string
+	spaceNames := map[string]string{}
+	tabsBySpace := map[string]map[string]*tabGroup{}
+	relabeled := map[string]bool{}
+
+	for _, a := range agents {
+		labels := labelsByAddr[a.TerminalID]
+		spaceID := labels["herdr.space"]
+		if spaceID == "" {
+			continue
+		}
+		if _, ok := tabsBySpace[spaceID]; !ok {
+			tabsBySpace[spaceID] = map[string]*tabGroup{}
+			spaceOrder = append(spaceOrder, spaceID)
+			if where := labels["where"]; where != "" {
+				spaceNames[spaceID] = strings.TrimSpace(strings.SplitN(where, " / ", 2)[0])
+			}
+		}
+		tabID := labels["herdr.tab"]
+		if tabID == "" {
+			tabID = a.TerminalID
+		}
+		tabLabel := labels["ofm.tab_label"]
+		if tabLabel == "" {
+			if where := labels["where"]; where != "" {
+				if parts := strings.SplitN(where, " / ", 2); len(parts) == 2 {
+					tabLabel = strings.TrimSpace(parts[1])
+				}
+			}
+		}
+		tg := tabsBySpace[spaceID][tabID]
+		if tg == nil {
+			tg = &tabGroup{label: tabLabel}
+			tabsBySpace[spaceID][tabID] = tg
+		}
+		if tg.label == "" {
+			tg.label = tabLabel
+		}
+		tg.addrs = append(tg.addrs, a.TerminalID)
+		a.WorkspaceID = spaceID
+		a.TabID = tabID
+		if tabLabel != "" {
+			a.TabLabel = tabLabel
+		}
+		if spaceNames[spaceID] != "" {
+			a.SessionName = spaceNames[spaceID]
+		}
+		relabeled[a.TerminalID] = true
+	}
+	out := spaces[:0]
+	for _, sp := range spaces {
+		// The synthetic per-terminal space id is "hc-core:<addr>"; drop the
+		// ones whose terminal just gained a real space.
+		if strings.HasPrefix(sp.ID, "hc-core:") && relabeled[sp.ID[len("hc-core:"):]] {
+			continue
+		}
+		out = append(out, sp)
+	}
+	for _, spaceID := range spaceOrder {
+		sp := Space{ID: spaceID, Name: spaceNames[spaceID]}
+		tabIDs := make([]string, 0, len(tabsBySpace[spaceID]))
+		for tabID := range tabsBySpace[spaceID] {
+			tabIDs = append(tabIDs, tabID)
+		}
+		sort.Strings(tabIDs)
+		for _, tabID := range tabIDs {
+			tg := tabsBySpace[spaceID][tabID]
+			tab := Tab{ID: tabID, Name: tg.label}
+			for _, addr := range tg.addrs {
+				tab.Terminals = append(tab.Terminals, Terminal{Address: addr})
+			}
+			sp.Tabs = append(sp.Tabs, tab)
+		}
+		out = append(out, sp)
+	}
+	return out
 }
 
 // AgentFlags extracts --model/--role/--effort (and =forms) from a launch
