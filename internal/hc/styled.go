@@ -99,6 +99,9 @@ type vtEmu struct {
 	savedRow, savedCol   int
 	savedAttr            vtAttr
 	savedWrap            bool
+	inSync               bool
+	syncBuf              []byte
+	pending              []byte
 }
 
 // RenderVT replays a collected attach stream and returns the rendered
@@ -126,6 +129,7 @@ func RenderVT(data []byte, cols, rows, scrollbackLines int) string {
 		e.grid[i] = make([]vtCell, cols)
 	}
 	e.feed(data)
+	e.flushSync() // a one-shot capture that ends inside a bracket still renders
 	return e.serialize()
 }
 
@@ -170,14 +174,93 @@ func bytes0Index(data, sep []byte) int {
 
 func (e *vtEmu) blank() vtCell { return vtCell{attr: e.attr} }
 
+// Synced-output (DEC ?2026) handling: full-screen apps wrap every repaint
+// in CSI ?2026l … CSI ?2026h so the display never shows a torn frame. The
+// relay snapshots the grid between watch ticks, so torn states are its
+// ONLY problem — the phone never sees the stream. Buffer everything
+// inside the bracket and apply atomically at end-sync; serialize then
+// always sees a coherent repaint.
+var (
+	syncBegin = []byte("\x1b[?2026l")
+	syncEnd   = []byte("\x1b[?2026h")
+)
+
+const syncBufferMax = 256 << 10
+
+// feed ingests one chunk of the attach stream. Bytes arriving while a
+// sync bracket is open accumulate in syncBuf; sequences split across
+// chunks park in pending until the rest arrives.
 func (e *vtEmu) feed(data []byte) {
+	for len(data) > 0 {
+		if e.inSync {
+			if i := bytes0Index(data, syncEnd); i >= 0 {
+				e.syncBuf = append(e.syncBuf, data[:i]...)
+				data = data[i+len(syncEnd):]
+				e.inSync = false
+				buf := e.syncBuf
+				e.syncBuf = nil
+				e.feedRaw(buf)
+			} else {
+				e.syncBuf = append(e.syncBuf, data...)
+				if len(e.syncBuf) > syncBufferMax {
+					// Unbalanced sync open (or a flood inside the
+					// bracket) — keeping it longer only widens the
+					// tear. Apply what we have and stay out of sync.
+					buf := e.syncBuf
+					e.syncBuf = nil
+					e.inSync = false
+					e.feedRaw(buf)
+				}
+				return
+			}
+			continue
+		}
+		i := bytes0Index(data, syncBegin)
+		if i < 0 {
+			e.feedRaw(data)
+			return
+		}
+		if i > 0 {
+			e.feedRaw(data[:i])
+		}
+		data = data[i:]
+		e.inSync = true
+		e.syncBuf = append(e.syncBuf[:0], data[:0]...)
+		data = data[len(syncBegin):]
+	}
+}
+
+// flushSync applies any buffered sync region early — used by the one-shot
+// renderer at end of capture. The observer leaves the bracket open and
+// keeps buffering instead.
+func (e *vtEmu) flushSync() {
+	if !e.inSync || len(e.syncBuf) == 0 {
+		return
+	}
+	buf := e.syncBuf
+	e.syncBuf = nil
+	e.inSync = false
+	e.feedRaw(buf)
+}
+
+// feedRaw parses and applies one chunk. Incomplete sequences at the tail
+// park in e.pending and prepend to the next feed — the attach channel
+// slices at arbitrary byte boundaries.
+func (e *vtEmu) feedRaw(data []byte) {
+	if len(e.pending) > 0 {
+		data = append(e.pending, data...)
+		e.pending = nil
+	}
 	for i := 0; i < len(data); {
 		b := data[i]
 		switch {
-		case b == 0x1b:
-			i = e.escape(data, i)
-		case b == 0x9b: // C1 CSI
-			i = e.csi(data, i+1)
+		case b == 0x1b || b == 0x9b:
+			next := e.escape(data, i)
+			if next > len(data) {
+				e.pending = append(e.pending[:0], data[i:]...)
+				return
+			}
+			i = next
 		case b < 0x20:
 			i = e.control(b, i)
 		case b == 0x7f:
@@ -187,6 +270,10 @@ func (e *vtEmu) feed(data []byte) {
 			if r == utf8.RuneError && n <= 1 {
 				i++
 				continue
+			}
+			if i+n > len(data) {
+				e.pending = append(e.pending[:0], data[i:]...)
+				return
 			}
 			e.putRune(r)
 			i += n
@@ -213,7 +300,7 @@ func (e *vtEmu) control(b byte, i int) int {
 
 func (e *vtEmu) escape(data []byte, i int) int {
 	if i+1 >= len(data) {
-		return i + 1
+		return len(data) + 1 // lone ESC at chunk end — park it
 	}
 	switch data[i+1] {
 	case '[':
@@ -227,18 +314,24 @@ func (e *vtEmu) escape(data []byte, i int) int {
 				return j + 2
 			}
 		}
-		return len(data)
+		return len(data) + 1
 	case 'P', 'X', '^', '_': // DCS/SOS/PM/APC … ST
 		for j := i + 2; j+1 < len(data); j++ {
 			if data[j] == 0x1b && data[j+1] == '\\' {
 				return j + 2
 			}
 		}
-		return len(data)
+		return len(data) + 1
 	case '(', ')': // charset designation, one final byte
-		return min(len(data), i+3)
+		if i+3 > len(data) {
+			return len(data) + 1
+		}
+		return i + 3
 	case '#', '%': // DEC test / charset family
-		return min(len(data), i+3)
+		if i+3 > len(data) {
+			return len(data) + 1
+		}
+		return i + 3
 	case '7':
 		e.savedRow, e.savedCol, e.savedAttr, e.savedWrap = e.row, e.col, e.attr, e.wrapPend
 	case '8':
@@ -284,8 +377,13 @@ func (e *vtEmu) csi(data []byte, i int) int {
 	for i < len(data) && data[i] >= 0x20 && data[i] <= 0x2f {
 		i++
 	}
-	if i >= len(data) || data[i] < 0x40 || data[i] > 0x7e {
-		// Aborted or truncated sequence — consume what we scanned.
+	if i >= len(data) {
+		// Truncated at the chunk boundary — park everything from the
+		// sequence start; the rest arrives with the next chunk.
+		return len(data) + 1
+	}
+	if data[i] < 0x40 || data[i] > 0x7e {
+		// Aborted sequence — consume what we scanned.
 		return max(start+1, i)
 	}
 	final := data[i]
@@ -642,12 +740,19 @@ func (e *vtEmu) eraseDisplay(mode int) {
 		for c := 0; c <= e.col; c++ {
 			e.grid[e.row][c] = e.blank()
 		}
-	default: // 2 (and 3, which clears scrollback in xterm — grid keeps it)
+	case 2:
 		for r := range e.grid {
 			for c := range e.grid[r] {
 				e.grid[r][c] = e.blank()
 			}
 		}
+	default: // 3 — xterm clears the scrollback too
+		for r := range e.grid {
+			for c := range e.grid[r] {
+				e.grid[r][c] = e.blank()
+			}
+		}
+		e.scrollback = nil
 	}
 }
 

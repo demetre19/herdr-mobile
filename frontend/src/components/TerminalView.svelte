@@ -846,16 +846,34 @@
       renderedRows = next;
       return 0;
     }
-    let splice = -1;
-    for (let k = Math.min(prev.length, next.length); k >= 1 && splice < 0; k--) {
-      const anchor = prev.length - k;
-      if (prev[anchor].text !== next[0].text) continue;
-      let matched = true;
-      for (let j = 0; j < Math.min(k, 12); j += 1) {
-        if (prev[anchor + j].text !== next[j].text) { matched = false; break; }
-      }
-      if (matched) splice = anchor;
+    // Anchor on the first NON-EMPTY row: fence/border lines render as
+    // separator tokens whose text is '' — every blank row matches them,
+    // so anchoring on next[0] when it's empty splices at a random blank
+    // deep in retained history and the leading chunk vanishes each tick
+    // (the pane's top jumps). The first substantive row locates this
+    // frame's position; empty rows before it align by index.
+    let head = 0;
+    while (head < next.length && !next[head].text) head += 1;
+    if (head === next.length) {
+      renderedRows = next;
+      return 0;
     }
+    let splice = -1;
+    let spliceScore = -1;
+    for (let anchor = head; anchor < prev.length; anchor += 1) {
+      if (prev[anchor].text !== next[head].text) continue;
+      let match = 0;
+      const probe = Math.min(prev.length - anchor + head, next.length, 256);
+      while (match < probe && prev[anchor - head + match].text === next[match].text) match += 1;
+      if (match > spliceScore) {
+        spliceScore = match;
+        splice = anchor - head;
+      }
+    }
+    // A true splice proves itself: the boundary run must match. Anything
+    // shorter is a bare row-text coincidence — replace wholesale (one
+    // reposition, never oscillation).
+    if (spliceScore < Math.min(next.length, 12)) splice = -1;
     renderedRows = splice < 0 ? next : prev.slice(0, splice).concat(next);
     if (renderedRows.length > LOCAL_SCROLLBACK_MAX) {
       const removed = renderedRows.length - LOCAL_SCROLLBACK_MAX;

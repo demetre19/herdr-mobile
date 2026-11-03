@@ -26,6 +26,15 @@ const (
 	observerIdleTTL    = 90 * time.Second
 	observerRespawnMin = 5 * time.Second
 	observerReadChunk  = 32 << 10
+	// observerQuiet marks a coherent frame: repaint bursts (bracketed or
+	// not) land as back-to-back chunks, so a feed silence this long means
+	// the app finished repainting. Snapshots taken mid-burst serialize a
+	// torn grid — half old half new — which the phone renders as a jump.
+	observerQuiet = 40 * time.Millisecond
+	// observerQuietMax bounds how long a read waits for quiet before
+	// serving the last coherent frame anyway (or a torn one on the very
+	// first paint).
+	observerQuietMax = 150 * time.Millisecond
 )
 
 // AttachObserver owns one `hc attach --observe` child plus the emulator
@@ -43,7 +52,10 @@ type AttachObserver struct {
 	spawnErr  error
 	cancel    context.CancelFunc
 	lastTouch time.Time
-	done      chan struct{}
+	done       chan struct{}
+	lastFeed   time.Time // last pump chunk fed into emu
+	lastSnapAt time.Time // when snap was serialized
+	snap       string    // coherent cached frame (serialized post-quiet)
 }
 
 func (c *Client) observerFor(addr string, cols, rows, scrollCap int) *AttachObserver {
@@ -152,10 +164,44 @@ func (o *AttachObserver) touch() {
 	o.mu.Unlock()
 }
 
+// snapshot returns the terminal's coherent frame. While the attach stream
+// is mid-burst it waits for the repaint to settle (observerQuiet of feed
+// silence), then serializes once and caches — reads between quiet windows
+// serve the cached coherent frame instead of a torn mid-repaint grid.
 func (o *AttachObserver) snapshot() string {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.emu.serialize()
+	deadline := time.Now().Add(observerQuietMax)
+	for {
+		o.mu.Lock()
+		quiet := o.emu != nil && time.Since(o.lastFeed) >= observerQuiet
+		if quiet && o.snap != "" && !o.lastSnapAt.Before(o.lastFeed) {
+			s := o.snap
+			o.mu.Unlock()
+			return s
+		}
+		if quiet {
+			s := o.emu.serialize()
+			o.snap, o.lastSnapAt = s, time.Now()
+			o.mu.Unlock()
+			return s
+		}
+		// Not quiet yet. If we already have a coherent frame and the wait
+		// budget is spent, serve it rather than block the read.
+		if o.snap != "" && time.Now().After(deadline) {
+			s := o.snap
+			o.mu.Unlock()
+			return s
+		}
+		o.mu.Unlock()
+		if time.Now().After(deadline) {
+			// First paint still mid-burst and no cache: serialize whatever
+			// exists rather than stall the read indefinitely.
+			o.mu.Lock()
+			s := o.emu.serialize()
+			o.mu.Unlock()
+			return s
+		}
+		time.Sleep(8 * time.Millisecond)
+	}
 }
 
 func (o *AttachObserver) kill() {
@@ -266,6 +312,7 @@ func (o *AttachObserver) pump(cmd *exec.Cmd, stdout io.Reader, emu *vtEmu) {
 					close(o.fed)
 				}
 			}
+			o.lastFeed = time.Now()
 			o.mu.Unlock()
 		}
 		if err != nil {
