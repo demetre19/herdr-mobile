@@ -139,3 +139,19 @@
   before v1.0.39: reads silently no-opped and leases failed "no exact
   terminal identity". Remote `machine/addr` pane reads always use plain
   `hc read` (attach replay over federation is seconds per frame).
+- **Styled hc frames are RENDERED, not raw** (v1.0.41): `hcStyledContent`
+  used to forward the `hc attach --observe` byte stream verbatim — a full
+  VT replay of cursor addressing, mode sets (`?25h`/`?2026l`/`?2004h`),
+  OSC-8 links, and device probes. The phone's ansi parser renders SGR
+  only, so everything else painted as literal `[34;4H` text and repaints
+  stacked. `internal/hc/styled.go` `RenderVT` replays the stream through a
+  small cell-grid emulator (DECSTBM margins, scroll/IL/DL, cursor
+  addressing, full SGR incl. 8/256/truecolor + ITU colon subparams, wide
+  runes) and serializes screen+scrollback as SGR-annotated rows — the
+  `pane read --format ansi` contract. Dimensions come from `hc get` (the
+  replay carries no size report). Two pitfalls permanently covered by
+  `styled_test.go`: row-shifting ops must assign FRESH row slices after
+  the memmove (clearing the displaced header erases the moved copy — one
+  row stamps across the region), and the SGR operand loop must stay an
+  indexed loop so `38;2;r;g;b`/`48` skip their operands (range-int loops
+  can't seek).
