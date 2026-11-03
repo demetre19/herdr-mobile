@@ -1,0 +1,170 @@
+[!p[?2026l[?9l[?1000l[?1001l[?1002l[?1003l[?1004l[?1005l[?1006l[?1015l[?1016l[?2004l[?1l[?66l[?2031l[?2048l[=0;1u[?1049l[?1047l[?47l[H[2J
+ Root cause found — the diagram isn't a theming bug: [0m[38;2;0;255;136m/api/vehicle-diagram/sedan[0m and [0m[38;2;0;255;136m/api/panel-shapes[0m 500 because the FastAPI backend isn't running. The car diagram is dark-theme hardcoded though, so it    
+ [0m[3mwould[0m be invisible on white. Checking the backend state:                                                                                                                                                     
+
+ Backend's down. Starting it to verify the diagram in the light theme:                                                                                                                                        
+
+ Backend's up and the diagram renders — but it's a black-on-black blueprint dropped onto the light theme. The component uses dark-theme presentation attributes, which CSS can override. Adding a diagram     
+ block to light.css:                                                                                                                                                                                          
+
+ The diagram inverts correctly, but panel labels render as black blobs — the text's white halo stroke needs inverting too:                                                                                    
+
+ Page looks clean except the drop-zone upload icon still renders cyan. Probing:                                                                                                                               
+
+ Computed style confirms red — done there. Running the impeccable detector over the changed files:                                                                                                            
+
+ Detector is clean. One final sanity shot of the hero + icon grid to confirm the animation/CTA state:                                                                                                         
+
+ All verified. Updating the DOX note for the new light-theme layer:                                                                                                                                           
+
+ All three fixes are in and verified on the live dev site:                                                                                                                                                    
+                                                                                                                                                                                                              
+ [0m[1m1. Secondary CTA → red border[0m — Call buttons are [0m[38;2;0;255;136m.btn.ghost[0m (red border) in the hero, header, mobile drawer, CTA band, contact, and suburb pages. Only quote-type CTAs stay solid red.                       
+                                                                                                                                                                                                              
+ [0m[1m2. White estimator[0m — New [0m[38;2;0;255;136msite/src/estimator/light.css[0m (~240 generated rules) re-themes the whole DROP-SCAN-QUOTE island when [0m[38;2;0;255;136mhtml[data-theme="light"][0m:                                                       
+ [0m[38;2;0;180;255m- [0mCyan accent [0m[38;2;0;240;255m■[0m [0m[38;2;0;0;0m[48;2;0;240;255m#00F0FF[0m → [0m[38;2;208;25;51m■[0m [0m[38;2;255;255;255m[48;2;208;25;51m#D01933[0m (eyebrows, mode segment, LOOKUP buttons, focus rings, diagram highlights)                                                                                                
+ [0m[38;2;0;180;255m- [0mWhite text → [0m[38;2;11;11;11m■[0m [0m[38;2;255;255;255m[48;2;11;11;11m#0b0b0b[0m ink; dark surfaces → [0m[38;2;253;253;252m■[0m [0m[38;2;0;0;0m[48;2;253;253;252m#fdfdfc[0m/[0m[38;2;248;248;246m■[0m [0m[38;2;0;0;0m[48;2;248;248;246m#f8f8f6[0m; [0m[38;2;0;255;136mbg-black/40[0m inputs → light neutral                                                                                                        
+ [0m[38;2;0;180;255m- [0m[38;2;0;255;136mCarDiagram[0m SVG remapped via attribute selectors — white car body, dark strokes, white label halos                                                                                                          
+ [0m[38;2;0;180;255m- [0mLiteral [0m[38;2;0;255;136mfill[0m/[0m[38;2;0;255;136mstroke[0m attributes (drop-zone icon, duotone paths) remapped — it follows the site's existing theme toggle, no separate switch                                                                  
+                                                                                                                                                                                                              
+ One thing worth flagging: the diagram was blank because [0m[38;2;0;255;136m/api/vehicle-diagram/*[0m and [0m[38;2;0;255;136m/api/panel-shapes[0m were 500ing — [0m[1mthe backend wasn't running[0m. I started [0m[38;2;0;255;136mbackend[0m uvicorn on [0m[38;2;0;255;136m:8000[0m; the car diagram now       
+ renders and clicks through.                                                                                                                                                                                  
+                                                                                                                                                                                                              
+ [0m[1m3. Slower, staggered icons[0m — [0m[38;2;0;255;136m.frame[0m stroke-draw now runs ~2.6s per icon with a [0m[38;2;0;255;136m--id[0m per-tile delay (0.4s → 1.9s across the grid), and the red heartbeat pulse waits until the draw finishes instead of       
+ firing under it.                                                                                                                                                                                             
+                                                                                                                                                                                                              
+ Impeccable [0m[38;2;0;255;136mdetect.mjs[0m over [0m[38;2;0;255;136mglobal.css[0m, [0m[38;2;0;255;136mlight.css[0m, [0m[38;2;0;255;136mBaDeck.astro[0m: clean. DOX updated to note the generated light layer (regenerate if new color literals land).                                                
+
+ [0m[3m[38;2;107;114;128m※ recap: Working on the red CTA styling and animation overhaul for the Dents Direct site; all three latest fixes (red-border secondary CTAs, white estimator theme, slower staggered icon animations) are    [0m
+ [0m[3m[38;2;107;114;128mimplemented and verified. Next: show you the results or take your next request.[0m                                                                                                                              
+
+[0m[48;2;15;18;22m                                                                                                                                                                                                              [0m
+[0m[48;2;15;18;22m [0m[38;2;229;229;231m[48;2;15;18;22mthe reviews should extend all the way to the RIGHT but only on the right hand side[0m[48;2;15;18;22m                                                                                                                           [0m
+[0m[48;2;15;18;22m [0m[1m[38;2;255;179;102m[48;2;15;18;22m #1[0m[38;2;229;229;231m[48;2;15;18;22m                                                                                                                                                                                                         [0m
+[0m[48;2;15;18;22m                                                                                                                                                                                                              [0m
+
+[0m[48;2;15;18;22m                                                                                                                                                                                                              [0m
+[0m[48;2;15;18;22m [0m[1m[38;2;255;179;102m[48;2;15;18;22m #1[0m[38;2;229;229;231m[48;2;15;18;22m FAQs should be page width, not this weird[0m[48;2;15;18;22m                                                                                                                                                               [0m
+[0m[48;2;15;18;22m                                                                                                                                                                                                              [0m
+[0m[48;2;15;18;22m [0m[38;2;229;229;231m[48;2;15;18;22mthe first questions should be open[0m[48;2;15;18;22m                                                                                                                                                                           [0m
+[0m[48;2;15;18;22m [0m[38;2;229;229;231m[48;2;15;18;22mand they should auto close when you click the next one[0m[48;2;15;18;22m                                                                                                                                                       [0m
+[0m[48;2;15;18;22m [0m[38;2;229;229;231m[48;2;15;18;22mI'd like nice smooth opening animationf[0m[48;2;15;18;22m                                                                                                                                                                      [0m
+[0m[48;2;15;18;22m                                                                                                                                                                                                              [0m
+
+ On it — FAQ fixes while the deck screenshot finishes. Checking the FAQ markup and styles:                                                                                                                    
+
+ The deck bleeds left too — it should keep the wrap's left edge and only extend right. Fixing with [0m[38;2;0;255;136mmargin-right[0m pull instead:                                                                                 
+
+ Now the FAQ block. Reading the suburb page's section markup:                                                                                                                                                 
+
+[0m[48;2;15;18;22m                                                                                                                                                                                                              [0m
+[0m[48;2;15;18;22m [0m[38;2;229;229;231m[48;2;15;18;22mthis section is way too wide[0m[48;2;15;18;22m                                                                                                                                                                                 [0m
+[0m[48;2;15;18;22m [0m[1m[38;2;255;179;102m[48;2;15;18;22m #1[0m[38;2;229;229;231m[48;2;15;18;22m                                                                                                                                                                                                         [0m
+[0m[48;2;15;18;22m                                                                                                                                                                                                              [0m
+
+ The section is missing its [0m[38;2;0;255;136m.wrap[0m container — content spans full width. Adding it:                                                                                                                            
+
+ Now the FAQ fixes. Checking if FAQs appear on other pages too:                                                                                                                                               
+
+ All three FAQ instances share the same markup — I'll make them full-wrap width, first-open, single-open accordion with smooth height animation. Reading [0m[38;2;0;255;136mBase.astro[0m's script block:                           
+
+ Now the CSS — overflow clipping for the height animation, answer fade-in:                                                                                                                                    
+
+[0m[48;2;15;18;22m                                                                                                                                                                                                              [0m
+[0m[48;2;15;18;22m [0m[38;2;229;229;231m[48;2;15;18;22mevery location page should have an embedded map of the area with DRIVING directions from that place[0m[48;2;15;18;22m                                                                                                          [0m
+[0m[48;2;15;18;22m [0m[38;2;229;229;231m[48;2;15;18;22mif you don't know how to do it[0m[48;2;15;18;22m                                                                                                                                                                               [0m
+[0m[48;2;15;18;22m                                                                                                                                                                                                              [0m
+[0m[48;2;15;18;22m [0m[38;2;229;229;231m[48;2;15;18;22mLook at how it's done on my SEO TIME MACHINES stm cli[0m[48;2;15;18;22m                                                                                                                                                        [0m
+[0m[48;2;15;18;22m [0m[38;2;229;229;231m[48;2;15;18;22mlook through the code to see[0m[48;2;15;18;22m                                                                                                                                                                                 [0m
+[0m[48;2;15;18;22m                                                                                                                                                                                                              [0m
+
+[0m[48;2;15;18;22m                                                                                                                                                                                                              [0m
+[0m[48;2;15;18;22m [0m[38;2;229;229;231m[48;2;15;18;22mfrom dents direct GMB to the center of that suburb[0m[48;2;15;18;22m                                                                                                                                                           [0m
+[0m[48;2;15;18;22m                                                                                                                                                                                                              [0m
+
+ Found it — [0m[38;2;0;255;136mmap-circles-location-pages-core.js[0m + a golden-rules doc. Reading both:                                                                                                                            
+
+ The STM recipe: [0m[38;2;0;255;136mmaps.google.com/maps?saddr=<origin>&daddr=<dest>&output=embed[0m — no API key needed. Now checking the suburb data shape:                                                                       
+
+ Perfect fit — the "From {suburb.name}" cell becomes an embedded directions map (same [0m[38;2;0;255;136msaddr[0m/[0m[38;2;0;255;136mdaddr[0m recipe as the STM code). Adding the URLs in frontmatter and the map card:                                   
+
+ Now the iframe styling in the page's [0m[38;2;0;255;136m<style>[0m block:                                                           [?1004h                                                                                               
+
+ [0m[38;2;107;114;128m[self-compact · notice] Heads-up only. Context usage is 100,474 tokens (38.3%) of a 262,000-token window, past the soft line of 100,000 (38.2%). Nothing is blocked, nothing is required, and this message   [0m
+ [0m[38;2;107;114;128masks for no action. Keep working.                                                                                                                                                                            [0m
+ [0m[38;2;107;114;128m                                                                                                                                                                                                             [0m
+ [0m[38;2;107;114;128mDo not acknowledge, report, or reply to this notice, and do not call `view_context` to check the numbers — you will be told when you reach the warning line at 200,000 tokens (76.3%); the hard cutoff is    [0m
+ [0m[38;2;107;114;128m235,800 (90.0%). Act on it silently and continue your current work.                                                                                                                                          [0m
+ [0m[38;2;107;114;128m                                                                                                                                                                                                             [0m
+ [0m[38;2;107;114;128mYou are in control of when to compact. If you ever decide the moment is right, `self_compact` takes a `note_to_self` (up to 24000 chars) with anything you would want to see or know after the compaction;   [0m
+ [0m[38;2;107;114;128mit is handed back to you as is. Compaction cycles completed so far: 1.[0m                                                                                                                                       [0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[H[2J[?2004h[?2031h[?2048h[?5522h[3g[9GH[17GH[25GH[33GH[41GH[49GH[57GH[65GH[73GH[81GH[89GH[97GH[105GH[113GH[121GH[129GH[137GH[145GH[153GH[161GH[169GH[177GH[185GH[193GH[201GH[H
+ Now the FAQ fixes — full width + first item open, on all three pages:                                                                                                                                        
+
+ Now verifying everything at once — suburb page (map + FAQ), the areas index wrap fix, and the rdeck right-bleed:                                                                                             
+
+ Map renders with the actual driving route (20 min, Alstonville → Hindmarsh St) and the FAQ accordion works — first item open, auto-closes when another opens. Now verifying the rdeck right-bleed and the    
+ [0m[38;2;0;255;136m/service-areas[0m wrap fix:                                                                                                                                                                                     
+
+ Everything checks out. Quick build sanity check, then I'll update the DOX:                                                                                                                                   
+
+ All four fixes are live and verified at [0m[38;2;0;255;136mhttp://192.168.0.132:4340/[0m:                                                                                                                                          
+                                                                                                                                                                                                              
+ [0m[1mReviews bleed right only[0m — [0m[38;2;0;255;136m.rdeck[0m now uses [0m[38;2;0;255;136mmargin-right: calc(50% - 50vw)[0m, so cards stay aligned to the content column on the left and run off the right edge of the viewport (measured: deck left 130px =   
+ wrap left, deck right 1440 = viewport edge). Last card gets a symmetric right margin when fully scrolled.                                                                                                    
+                                                                                                                                                                                                              
+ [0m[1mFAQs[0m — applied to all three FAQ blocks (home, [0m[38;2;0;255;136m/faq[0m, every suburb page):                                                                                                                                      
+ [0m[38;2;0;180;255m- [0mFull container width — dropped the [0m[38;2;0;255;136m.maxw[0m (46rem) constraint                                                                                                                                                
+ [0m[38;2;0;180;255m- [0mFirst question renders open                                                                                                                                                                                
+ [0m[38;2;0;180;255m- [0mClicking another question smoothly collapses the open one — WAAPI height animation on the [0m[38;2;0;255;136m<details>[0m (380ms open / 320ms close, site-standard ease) with the answer text fading in 50ms behind the motion.  
+   Verified: opening Q2 closes Q1.                                                                                                                                                                            
+                                                                                                                                                                                                              
+ [0m[1m"What we need" section[0m — was missing its [0m[38;2;0;255;136m<div class="wrap">[0m entirely, so it spanned the full viewport. Now wrapped; matches every other section.                                                             
+                                                                                                                                                                                                              
+ [0m[1mEmbedded driving-directions maps on every location page[0m — using your STM [0m[38;2;0;255;136mmap-circles-location-pages-core.js[0m recipe: [0m[38;2;0;255;136mmaps.google.com/maps?saddr={Suburb NSW postcode}&daddr=Dents Direct, 13 Hindmarsh        [0m
+ [0m[38;2;0;255;136mStreet&output=embed[0m — no API key needed. It replaces the old text-only "From {suburb}" card with a live map showing the actual driving route (verified on Alstonville: renders the 20-min/18.3km route with  
+ pins), plus an "Open driving directions →" deep link. All ~55 suburb pages get it automatically via the static template.                                                                                     
+                                                                                                                                                                                                              
+ [0m[38;2;0;255;136mastro build[0m: 63 pages, clean. DOX updated.                                                                                                                                                                   
+
+ [0m[3m[38;2;107;114;128m※ recap: Polishing the Dents Direct Astro site — red CTA system, animations, light estimator, right-bleeding reviews deck, accordion FAQs, and suburb driving-direction maps are all done and verified.      [0m
+ [0m[3m[38;2;107;114;128mNext: your review on the dev site, or the GoBox-style suburb template if you want it bui…[0m                                                                                                                    
+
+[0m[38;2;244;74;51m╭──[0m[48;2;15;18;22m [0m[38;2;107;114;128m[48;2;15;18;22m󰵗[0m[48;2;15;18;22m [0m[38;2;42;48;56m[48;2;15;18;22m[0m[48;2;15;18;22m [0m[38;2;244;74;51m[48;2;15;18;22m SWE-2 · 󰪣 high[0m[48;2;15;18;22m [0m[38;2;42;48;56m[48;2;15;18;22m[0m[48;2;15;18;22m [0m[38;2;232;236;244m[48;2;15;18;22m …E-DEV/Dents Direct/dents-direct-website[0m[48;2;15;18;22m [0m[38;2;42;48;56m[48;2;15;18;22m[0m[48;2;15;18;22m [0m[38;2;255;179;71m[48;2;15;18;22m main *12[0m[48;2;15;18;22m [0m[38;2;0;255;136m[48;2;15;18;22m+2[0m[48;2;15;18;22m [0m[38;2;156;163;176m[48;2;15;18;22m?5[0m[48;2;15;18;22m [0m[38;2;42;48;56m[48;2;15;18;22m[0m[48;2;15;18;22m  [0m[38;2;156;163;176m[48;2;15;18;22m40.5%/262K[0m[48;2;15;18;22m [0m[38;2;156;163;176m[48;2;15;18;22m󰁨[0m[48;2;15;18;22m [0m[38;2;42;48;56m[48;2;15;18;22m[0m[48;2;15;18;22m [0m[38;2;212;192;144m[48;2;15;18;22m󰙺 3.50[0m[48;2;15;18;22m [0m[38;2;15;18;22m[0m[38;2;244;74;51m─[0m[38;2;15;18;22m[0m[48;2;15;18;22m  [0m[38;2;244;74;51m[48;2;15;18;22mPro[0m[48;2;15;18;22m · 1d [0m[38;2;156;163;176m[48;2;15;18;22m1% (7h 1m)[0m[48;2;15;18;22m · 7d [0m[38;2;156;163;176m[48;2;15;18;22m2% (5d 7h)[0m[48;2;15;18;22m [0m[38;2;42;48;56m[48;2;15;18;22m[0m[48;2;15;18;22m [0m[38;2;244;74;51m[48;2;15;18;22m󰢵 CTA: Apply red CTA styling and animation[0m… [0m[38;2;244;74;51m──╮[0m
+[0m[38;2;244;74;51m╰─ [0m                                                                                                                                                                                                        [0m[38;2;244;74;51m ─╯[0m
+ [0m[38;2;107;114;128m[[0m[38;2;0;180;255m#######[0m[38;2;156;163;176m~[0m[38;2;0;180;255m#[0m[38;2;107;114;128m------[0m[38;2;255;179;71m![0m[38;2;107;114;128m-[0m[38;2;255;71;87m|[0m[38;2;107;114;128m--] 41% 106.1k/262.0k[0m [0m[38;2;0;180;255mNOTICE[0m[38;2;107;114;128m ~38% !76% |90%[0m                                                                                                                                               [34;4H[0m[=5;1u]2;π - 󰢵 CTA: Apply red CTA styling and animations site-wide - dents-direct-website\]7501;state=done:app=omp\

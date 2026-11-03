@@ -253,7 +253,16 @@ func (s *Server) hcStyledContent(ctx context.Context, address string, lines int)
 		}
 		return fallback, nil
 	}
-	content := string(raw)
+	// The attach stream is a raw VT replay — cursor addressing, mode
+	// sets, OSC links, probes — and the phone's ansi parser only renders
+	// SGR. Render the replay into the final screen first (same contract
+	// as `pane read --format ansi`), with the terminal's live dimensions
+	// so rows land on their real wrap boundaries.
+	var cols, rows int
+	if term, gerr := s.hcC.Get(ctx, address); gerr == nil && term != nil {
+		cols, rows = term.Cols, term.Rows
+	}
+	content := hc.RenderVT(raw, cols, rows, lines)
 	s.hcStyledMu.Lock()
 	if s.hcStyledCache == nil {
 		s.hcStyledCache = make(map[string]hcStyledFrame)
