@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"github.com/0cv/herdr-mobile-relay/internal/hc"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,7 @@ type paneWatch struct {
 	acknowledged     *paneWatchFrame
 	pending          *paneWatchFrame
 	probeFingerprint string
+	lastRead         time.Time
 }
 
 func (s *Server) startPaneWatch(client *transport.ClientConn, message map[string]any) {
@@ -215,7 +217,28 @@ func (s *Server) pollPaneWatch(watch *paneWatch) {
 // pollHcPaneWatch is the hc counterpart of the probe+read poll: it always
 // reads the frame (hc has no probe RPC) and lets paneWatchUpdate suppress or
 // delta-encode unchanged content.
+// hcRemoteWatchFloor throttles federated `machine/t` panes: every read is
+// an SSH round-trip through the owning machine's hc-launchd, so a 250ms
+// phone watch would drive sustained remote load for zero latency gain.
+const hcRemoteWatchFloor = 2 * time.Second
+
+// pollHcPaneWatch is the hc counterpart of the probe+read poll: it always
+// reads the frame (hc has no probe RPC) and lets paneWatchUpdate suppress or
+// delta-encode unchanged content. Federated panes floor at
+// hcRemoteWatchFloor to bound the remote machine's serving load.
 func (s *Server) pollHcPaneWatch(watch *paneWatch) {
+	if hc.IsRemoteAddress(hcAddress(watch.paneID)) {
+		// The ticker keeps the client's cadence, but federated reads are
+		// bounded to one per hcRemoteWatchFloor — the read itself is the
+		// remote RPC, so skipping ticks is the only throttle that works.
+		watch.mu.Lock()
+		if time.Since(watch.lastRead) < hcRemoteWatchFloor {
+			watch.mu.Unlock()
+			return
+		}
+		watch.lastRead = time.Now()
+		watch.mu.Unlock()
+	}
 	response, frame := s.readPaneWatchFrame(watch)
 	if frame == nil || !s.paneWatchCurrent(watch) {
 		return

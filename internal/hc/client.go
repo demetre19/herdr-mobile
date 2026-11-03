@@ -22,6 +22,13 @@ import (
 // herdr pane ids on the wire or in client-side pane caches.
 const PanePrefix = "hc:"
 
+// IsRemoteAddress reports whether a core address is federated
+// (`<machine>/<terminal>`): the pane lives on another machine and every
+// read is a remote RPC — callers must keep remote traffic bounded.
+func IsRemoteAddress(address string) bool {
+	return strings.Contains(address, "/")
+}
+
 // ErrUnavailable is returned when neither the app window nor the core daemon
 // answered; the watcher surfaces it as an offline inventory rather than an
 // empty one.

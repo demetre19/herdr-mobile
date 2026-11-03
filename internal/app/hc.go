@@ -202,13 +202,14 @@ func (s *Server) hcReadPane(ctx context.Context, message map[string]any) map[str
 	}
 	var content string
 	var err error
-	if format == "ansi" {
-		// Local AND remote-machine terminals take the observer path:
-		// `hc attach --observe machine/addr` streams the same replay
-		// over federation, so the persistent attach amortizes to an
-		// instant serialize per read — the "seconds to first paint"
-		// cost exists only for the first-ever attach. Dropping to the
-		// plain read here rendered remote panes monochrome.
+	if format == "ansi" && !hc.IsRemoteAddress(hcAddress(paneID)) {
+		// Local terminals take the observer path: the persistent
+		// `hc attach --observe` streams the replay continuously, so a
+		// read is an instant serialize of the live grid. REMOTE panes
+		// must NOT attach — a federated attach streams the pane's whole
+		// output over SSH forever and makes the owning machine's
+		// hc-launchd burn CPU serving it; remote reads stay bounded
+		// `hc read` calls instead.
 		content, err = s.hcStyledContent(ctx, hcAddress(paneID), lines)
 	} else {
 		content, err = s.hcC.Read(ctx, hcAddress(paneID), lines)

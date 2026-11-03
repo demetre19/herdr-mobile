@@ -237,7 +237,7 @@ func (w *Watcher) sessionMetaFor(ctx context.Context, address, dir string) hcSes
 
 // hcMetaRemoteRefresh bounds remote `hc exec` resolves: model switches are
 // rare, so a fresh enough answer stands.
-const hcMetaRemoteRefresh = 45 * time.Second
+const hcMetaRemoteRefresh = 300 * time.Second
 
 // newestSessionFile picks the most recent .jsonl in an omp --session-dir.
 // Names are timestamp-prefixed so lexicographic order is chronological.
