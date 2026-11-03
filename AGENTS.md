@@ -166,3 +166,26 @@
   observers reap at 90s; mid-stream `ESC[8;r;c t` reports rebuild the
   grid; a paint-less attach death falls back to plain `hc read`. The
   old `ReadStyled`/lockedBuffer/quiet-detection path is gone.
+- **Coherent hc frames: sync-buffered repaint + quiet-gated snapshot**
+  (v1.0.43): the phone was jumping because snapshots serialized the grid
+  mid-repaint. Two layers, both in `internal/hc`:
+  - `styled.go` `feed()` buffers bytes inside a DEC `?2026l`/`?2026h`
+    sync bracket into `syncBuf` and applies them atomically at `?2026h`;
+    chunk-split escape sequences park in `pending[]` until the rest of
+    the sequence arrives (`escape`/`csi` return `len(data)+1` to mark
+    truncation). `RenderVT` flushes `syncBuf` at end-of-capture; the
+    observer leaves brackets open and keeps buffering. `eraseDisplay`
+    mode 3 also clears `scrollback` (xterm parity).
+  - `observer.go` `snapshot()` only serializes after `observerQuiet`
+    (40ms) of feed silence — repaint bursts land as back-to-back chunks,
+    so silence = repaint finished. Between quiet windows it serves the
+    last coherent frame (`snap`), so a read never ships a torn
+    half-old/half-new grid. `pump` stamps `lastFeed` under `mu` after
+    each chunk.
+  - `TerminalView.svelte` `spliceScrollback` anchors on the first
+    NON-EMPTY row (fence/border lines render as `text:''` separator
+    tokens — every blank row matched them and spliced at a random blank
+    deep in retained history, dropping the leading chunk each tick) and
+    scores candidates by match length so a true boundary (matches all
+    retained rows) beats a coincidental repeat. Both fixes together end
+    the 127↔150-row oscillation measured in `tests/scroll-harness/`.
