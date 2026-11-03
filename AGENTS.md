@@ -206,3 +206,14 @@
   `machine/addr` too — federated attach amortizes inside the
   persistent observer, so remote panes render styled (the old
   plain-read shortcut made them monochrome).
+- **hc workspace pins + machine grouping** (v1.0.48): `HcView` space
+  summaries carry a `.workspace-pin` button; pinned spaces render in a
+  top "Pinned" section in pin order (append, like legacy
+  `pinnedWorkspaces`), deduped out of their relay section, and unpin
+  restores them. `pinnedHcSpaces` (`herdr_pinned_hc_spaces`, keys
+  `hc:<relayId>:<space.id>`) + `prunePinnedHcSpaces` drop pins whose
+  space vanished on a CONNECTED relay only — offline relays keep pins.
+  Spaces inside a section group local-first then one block per
+  federated `space.machine` under an `@<machine>` heading
+  (`machineGroups`), the boundary that keeps remote cards from blending
+  into local. E2E: `tests/scroll-harness/hc-pin.mjs` 7/7.
