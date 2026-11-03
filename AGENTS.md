@@ -89,13 +89,24 @@
 
 ## Herdr App ("hc") lane (v1.0.32)
 
-- `internal/hc` watches the new Herdr app: `herdr-app ls` (window topology)
-  is the inventory; `herdr-core`/`hc ls --all --json` only fills in when
-  the window is unreachable (`state=="live"` entries get synthetic
-  `hc-core:<address>` spaces that MUST be appended to `snap.Spaces` — the
-  phone renders core terminals from spaces, not agents). `hc ls` counts
-  detached workers and finished shells as terminals — merging them while
-  the window is open renders dead processes as cards.
+- `internal/hc` watches the new Herdr app. **Terminal records come from
+  the `hc events --json` stream** (v1.0.39): the connect frame carries
+  FULL records (labels, foreground argv, status object) and JSON-RPC
+  events patch them — `title` patches in place, everything else marks
+  the address dirty for a one-shot `hc get` resync in the next poll.
+  While `streamLive`, polls never shell out to `hc get`; on drop the
+  stream restarts (2s backoff) and `hc ls --all --json` + bounded `hc
+  get` is the downgrade path. Event wakes re-poll with a 400ms debounce
+  floored at 2s (`pollMu` serializes polls, `wakeMu` guards the
+  AfterFunc timer). `herdr-app ls` (window topology) supplies spaces →
+  tabs; `hc ls` supplies `machines[]` only (remote names also derive
+  from `machine/addr` prefixes mid-stream). `hc ls` counts detached
+  workers and finished shells as terminals — merging them while the
+  window is open renders dead processes as cards; with the window
+  closed, `regroupLabeledTerminals` rebuilds real spaces from
+  `herdr.space`/`herdr.tab`/`ofm.tab_label`/`where` labels and only
+  unlabeled workers land in synthetic `hc-core:<address>` spaces
+  (which MUST be appended to `snap.Spaces`).
 - `hc_launch` mounts a tab+terminal in the open window: `handleHcLaunch`
   resolves `profile_id` through `profiles.Resolver.Profile().Argv` (same
   catalog as `agent_start`), then `Client.TabNew`. **`tab.new` lands in the
