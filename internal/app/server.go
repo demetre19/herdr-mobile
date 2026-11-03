@@ -117,8 +117,6 @@ type Server struct {
 	dispatcher       *coordinator.Dispatcher
 	hcC              *hc.Client
 	hcW              *hc.Watcher
-	hcStyledMu       sync.Mutex
-	hcStyledCache    map[string]hcStyledFrame
 	hcStatusMu       sync.Mutex
 	hcPrevStatus     map[string]string
 	updateM          *relayupdate.Manager

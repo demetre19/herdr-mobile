@@ -222,6 +222,12 @@ type Client struct {
 	AppBin  string
 	CoreBin string
 	Timeout time.Duration
+
+	// observers holds persistent `hc attach --observe` sessions — one per
+	// local terminal whose styled screen is being read/watched. Keyed by
+	// terminal address.
+	observersMu sync.Mutex
+	observers   map[string]*AttachObserver
 }
 
 func NewClient(appBin, coreBin string) *Client {
@@ -405,116 +411,8 @@ func (c *Client) Read(ctx context.Context, address string, lines int) (string, e
 	return payload.Text, nil
 }
 
-// ReadStyled returns the terminal's screen as an ANSI/VT stream (colors
-// preserved), collected from `hc attach --observe --history <lines>`. The
-// attach replays the styled screen then streams live output; an observer
-// needs only the initial replay, so the stream is closed once output has
-// been quiet for styledReadQuietAfter (or the cap/deadline hits). Plain
-// `hc read` stays the text path — this exists because read is
-// ANSI-stripped and the phone renders the ansi format.
-func (c *Client) ReadStyled(ctx context.Context, address string, lines int) ([]byte, error) {
-	if lines < 0 {
-		lines = 0
-	}
-	if lines > styledReadHistoryMax {
-		lines = styledReadHistoryMax
-	}
-	deadline, cancel := context.WithTimeout(ctx, styledReadMaxWait)
-	defer cancel()
-	cmd := exec.CommandContext(deadline, c.CoreBin, "attach", "--observe",
-		"--history", fmt.Sprintf("%d", lines), address)
-	cmd.Stdin = nil
-	var mu sync.Mutex
-	var buf bytes.Buffer
-	cmd.Stdout = &lockedBuffer{mu: &mu, buf: &buf, cap: styledReadMaxBytes}
-	cmd.Stderr = io.Discard
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	lastLen, lastGrow := 0, time.Now()
-	for {
-		select {
-		case <-deadline.Done():
-			<-done
-			mu.Lock()
-			out := append([]byte(nil), buf.Bytes()...)
-			mu.Unlock()
-			if len(out) == 0 {
-				return nil, deadline.Err()
-			}
-			return out, nil
-		case err := <-done:
-			mu.Lock()
-			out := append([]byte(nil), buf.Bytes()...)
-			mu.Unlock()
-			if err != nil && len(out) == 0 {
-				return nil, err
-			}
-			return out, nil
-		default:
-		}
-		mu.Lock()
-		n := buf.Len()
-		mu.Unlock()
-		if n > lastLen {
-			lastLen, lastGrow = n, time.Now()
-		} else if lastLen > 0 && time.Since(lastGrow) >= styledReadQuietAfter {
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
-			<-done
-			mu.Lock()
-			out := append([]byte(nil), buf.Bytes()...)
-			mu.Unlock()
-			return out, nil
-		} else if lastLen == 0 && time.Since(lastGrow) >= styledReadFirstByte {
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
-			<-done
-			return nil, fmt.Errorf("hc attach %s: no replay output", address)
-		}
-		select {
-		case <-time.After(25 * time.Millisecond):
-		case <-deadline.Done():
-		}
-	}
-}
-
-// lockedBuffer keeps the LAST `cap` bytes written (the newest part of the
-// replay — the current screen), dropping the oldest from the head. A head
-// cap would deliver the beginning of history and lose the live screen.
-type lockedBuffer struct {
-	mu  *sync.Mutex
-	buf *bytes.Buffer
-	cap int
-}
-
-func (w *lockedBuffer) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.buf.Write(p)
-	if over := w.buf.Len() - w.cap; over > 0 {
-		w.buf.Next(over)
-	}
-	return len(p), nil
-}
-
-// ReadStyled limits: the replay bursts fast, then live output trickles —
-// quiet means "the screen is fully painted". 4s of silence covers a slow
-// remote hop; the 8s outer deadline bounds attach+collection for a dead
-// core; the byte cap keeps one collect well under the phone's ~4MiB
-// outbound-message budget once JSON-escaped (a multi-megabyte replay used
-// to fill the client send buffer and evict it on connect).
-const (
-	styledReadQuietAfter = 1200 * time.Millisecond
-	styledReadFirstByte  = 4 * time.Second
-	styledReadMaxWait    = 8 * time.Second
-	styledReadMaxBytes   = 512 << 10
-	styledReadHistoryMax = 500
-)
+// Styled screen reads live in observer.go (persistent `hc attach
+// --observe` sessions feeding the VT emulator in styled.go).
 
 // Get returns the full record for one terminal (status, title, argv…).
 func (c *Client) Get(ctx context.Context, address string) (*CoreTerminal, error) {

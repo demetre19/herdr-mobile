@@ -220,29 +220,19 @@ func (s *Server) hcReadPane(ctx context.Context, message map[string]any) map[str
 	}
 }
 
-// hcStyledFrame caches one attach-collected ANSI frame per terminal. `hc
-// attach --observe` replays the styled screen then streams live output, so a
-// full collect costs ~1.5s of quiet detection — too expensive per watch tick
-// (250ms+). A fresh-enough frame is served verbatim; TerminalView's keyed-row
-// splice keeps the repaint stable anyway.
-type hcStyledFrame struct {
-	content  string
-	captured time.Time
-}
-
-const hcStyledFreshness = 1500 * time.Millisecond
-
+// hcStyledContent serves a terminal's current styled screen from the
+// persistent `hc attach --observe` session that `hcC.Observe` maintains:
+// the replay feeds the relay's VT emulator continuously, so a read is an
+// instant serialize of the live grid — no per-poll collect, and the
+// phone sees genuinely live output instead of deadline-stale frames.
 func (s *Server) hcStyledContent(ctx context.Context, address string, lines int) (string, error) {
-	s.hcStyledMu.Lock()
-	if s.hcStyledCache == nil {
-		s.hcStyledCache = make(map[string]hcStyledFrame)
+	// Dimensions come from `hc get` (the replay's size report is
+	// unreliable); the observer keeps them pinned until they change.
+	var cols, rows int
+	if term, gerr := s.hcC.Get(ctx, address); gerr == nil && term != nil {
+		cols, rows = term.Cols, term.Rows
 	}
-	cached, ok := s.hcStyledCache[address]
-	s.hcStyledMu.Unlock()
-	if ok && time.Since(cached.captured) < hcStyledFreshness {
-		return cached.content, nil
-	}
-	raw, err := s.hcC.ReadStyled(ctx, address, lines)
+	content, err := s.hcC.Observe(ctx, address, cols, rows, lines)
 	if err != nil {
 		// A dead/finished terminal falls back to the plain-text read — a
 		// monochrome frame beats an error toast for a pane that is simply
@@ -253,22 +243,6 @@ func (s *Server) hcStyledContent(ctx context.Context, address string, lines int)
 		}
 		return fallback, nil
 	}
-	// The attach stream is a raw VT replay — cursor addressing, mode
-	// sets, OSC links, probes — and the phone's ansi parser only renders
-	// SGR. Render the replay into the final screen first (same contract
-	// as `pane read --format ansi`), with the terminal's live dimensions
-	// so rows land on their real wrap boundaries.
-	var cols, rows int
-	if term, gerr := s.hcC.Get(ctx, address); gerr == nil && term != nil {
-		cols, rows = term.Cols, term.Rows
-	}
-	content := hc.RenderVT(raw, cols, rows, lines)
-	s.hcStyledMu.Lock()
-	if s.hcStyledCache == nil {
-		s.hcStyledCache = make(map[string]hcStyledFrame)
-	}
-	s.hcStyledCache[address] = hcStyledFrame{content: content, captured: time.Now()}
-	s.hcStyledMu.Unlock()
 	return content, nil
 }
 
