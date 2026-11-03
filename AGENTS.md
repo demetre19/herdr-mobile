@@ -197,3 +197,12 @@
   path (quiet = repaint done, drain held sync) and on the deadline path.
   Rule: any content-hold keyed on an input marker needs a reader-driven
   flush, because the close marker may simply never arrive.
+- **Chip + styled parity for hc panes** (v1.0.45/46): bare-`omp` hc
+  window tabs carry no `--session-dir`, so `agentSessionDirFor`
+  (sessionmeta.go) resolves the dir via `lsof` on the foreground pid —
+  remote through `hc exec --on` — with the `~/.omp/agent/sessions/
+  <cwd-slug>` fallback, cached per address keyed on `dirPid`. And
+  `format=="ansi"` takes the observer path for qualified
+  `machine/addr` too — federated attach amortizes inside the
+  persistent observer, so remote panes render styled (the old
+  plain-read shortcut made them monochrome).
