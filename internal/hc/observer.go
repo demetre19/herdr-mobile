@@ -179,6 +179,10 @@ func (o *AttachObserver) snapshot() string {
 			return s
 		}
 		if quiet {
+			// Quiet = repaint done: drain any held sync region so the
+			// serialized frame includes it — an app that opens ?2026 and
+			// never closes must not starve the grid to blank.
+			o.emu.flushSync()
 			s := o.emu.serialize()
 			o.snap, o.lastSnapAt = s, time.Now()
 			o.mu.Unlock()
@@ -193,9 +197,12 @@ func (o *AttachObserver) snapshot() string {
 		}
 		o.mu.Unlock()
 		if time.Now().After(deadline) {
-			// First paint still mid-burst and no cache: serialize whatever
-			// exists rather than stall the read indefinitely.
+			// First paint still mid-burst and no cache: drain any held
+			// sync region and serialize whatever exists — a torn frame
+			// beats an empty one; the next quiet window restores
+			// coherence.
 			o.mu.Lock()
+			o.emu.flushSync()
 			s := o.emu.serialize()
 			o.mu.Unlock()
 			return s

@@ -203,13 +203,10 @@ func (e *vtEmu) feed(data []byte) {
 			} else {
 				e.syncBuf = append(e.syncBuf, data...)
 				if len(e.syncBuf) > syncBufferMax {
-					// Unbalanced sync open (or a flood inside the
-					// bracket) — keeping it longer only widens the
-					// tear. Apply what we have and stay out of sync.
 					buf := e.syncBuf
 					e.syncBuf = nil
 					e.inSync = false
-					e.feedRaw(buf)
+						e.feedRaw(buf)
 				}
 				return
 			}
@@ -225,7 +222,6 @@ func (e *vtEmu) feed(data []byte) {
 		}
 		data = data[i:]
 		e.inSync = true
-		e.syncBuf = append(e.syncBuf[:0], data[:0]...)
 		data = data[len(syncBegin):]
 	}
 }
@@ -239,9 +235,9 @@ func (e *vtEmu) flushSync() {
 	}
 	buf := e.syncBuf
 	e.syncBuf = nil
-	e.inSync = false
 	e.feedRaw(buf)
 }
+
 
 // feedRaw parses and applies one chunk. Incomplete sequences at the tail
 // park in e.pending and prepend to the next feed — the attach channel
