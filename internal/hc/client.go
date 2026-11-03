@@ -80,6 +80,8 @@ type CoreTerminal struct {
 	Foreground *struct {
 		Argv []string `json:"argv"`
 		Name string   `json:"name"`
+		Pid  int64    `json:"pid"`
+		Cwd  string   `json:"cwd"`
 	} `json:"foreground"`
 }
 

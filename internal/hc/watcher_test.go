@@ -353,6 +353,8 @@ esac`
 		Foreground: &struct {
 			Argv []string `json:"argv"`
 			Name string   `json:"name"`
+			Pid  int64    `json:"pid"`
+			Cwd  string   `json:"cwd"`
 		}{Argv: []string{"omp", "--model", "pi/slow"}, Name: "omp"},
 		Labels: map[string]string{"herdr.space": "spa1", "herdr.tab": "tb1",
 			"ofm.tab_label": "THE BOSS", "where": "of-machinery / THE BOSS"},

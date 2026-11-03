@@ -16,9 +16,123 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
+
+// agentSessionDirFor resolves a terminal's omp session dir when the
+// foreground argv carries no --session-dir (the common hc shape — the
+// window launches a bare `omp`). The process's own file table names the
+// live session JSONL exactly; the cwd→slug convention under
+// ~/.omp/agent/sessions is the fallback for terminals whose pid is gone.
+func (w *Watcher) agentSessionDirFor(ctx context.Context, address string, full *CoreTerminal) string {
+	if full == nil || full.Foreground == nil {
+		return ""
+	}
+	pid := full.Foreground.Pid
+	state := w.metaStates[address]
+	// Reuse a resolved dir while it still belongs to the same foreground
+	// process — the JSONL path is already proven. A pid change means a
+	// restarted session that may live in a different dir entirely.
+	if state != nil && state.dir != "" && state.dirPid == pid && pid > 0 {
+		return state.dir
+	}
+	var dir string
+	if strings.Contains(address, "/") {
+		dir = w.remoteSessionDir(ctx, address, pid, full.Foreground.Cwd)
+	} else {
+		dir = localSessionDir(pid, full.Foreground.Cwd)
+	}
+	if dir == "" {
+		return ""
+	}
+	if state == nil {
+		state = &sessionMetaState{}
+		if w.metaStates == nil {
+			w.metaStates = make(map[string]*sessionMetaState)
+		}
+		w.metaStates[address] = state
+	}
+	state.dir = dir
+	state.dirPid = pid
+	return dir
+}
+
+// localSessionDir asks lsof which session JSONL the omp process holds —
+// exact for the live pid — then falls back to the cwd slug directory.
+func localSessionDir(pid int64, cwd string) string {
+	if pid > 0 {
+		if dir := sessionDirFromLsof(pid); dir != "" {
+			return dir
+		}
+	}
+	return sessionDirFromCwd(cwd, os.Getenv("HOME"))
+}
+
+// sessionDirFromLsof returns the ~/.omp/agent/sessions dir holding the
+// JSONL this pid keeps open, or "" — lsof needs no args filtering here
+// because the session file is the only .jsonl an omp process writes.
+func sessionDirFromLsof(pid int64) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "lsof", "-p",
+		fmt.Sprint(pid), "-Fn").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "n") && strings.HasSuffix(line, ".jsonl") {
+			if dir := filepath.Dir(line[1:]); strings.HasPrefix(dir,
+				filepath.Join(os.Getenv("HOME"), ".omp", "agent", "sessions")) {
+				return dir
+			}
+		}
+	}
+	return ""
+}
+
+// sessionDirFromCwd maps a cwd to OMP's session-dir slug: the absolute
+// path minus $HOME, slashes → dashes ("/Users/apple/Documents/X" →
+// "~/.omp/agent/sessions/-Documents-X").
+func sessionDirFromCwd(cwd, home string) string {
+	if cwd == "" || home == "" {
+		return ""
+	}
+	slug := strings.TrimPrefix(cwd, home)
+	if slug == cwd {
+		// cwd outside $HOME still slugs, just keeps its leading slash
+		// relative to nothing — same as OMP's own naming.
+		slug = cwd
+	}
+	dir := filepath.Join(home, ".omp", "agent", "sessions",
+		strings.ReplaceAll(slug, "/", "-"))
+	if st, err := os.Stat(dir); err == nil && st.IsDir() {
+		return dir
+	}
+	return ""
+}
+
+// remoteSessionDir resolves the same through `hc exec --on` on the
+// terminal's machine — lsof for the live pid, then the cwd slug.
+func (w *Watcher) remoteSessionDir(ctx context.Context, address string, pid int64, cwd string) string {
+	machine, _, ok := strings.Cut(address, "/")
+	if !ok {
+		return ""
+	}
+	script := `d=$(lsof -p "$1" -Fn 2>/dev/null | sed -n 's|^n\(.*\.jsonl\)$|\1|p' | ` +
+		`grep "/.omp/agent/sessions/" | head -n 1); d=${d%/*}; ` +
+		`if [ -z "$d" ] && [ -n "$2" ]; then s=${2#"$HOME"}; s=$(printf '%s' "$s" | tr '/' '-'); ` +
+		`cand="$HOME/.omp/agent/sessions/$s"; [ -d "$cand" ] && d=$cand; fi; ` +
+		`[ -n "$d" ] && printf '%s\n' "$d"`
+	out, err := w.client.execOn(ctx, machine, "/bin/sh", "-c", script, "sh",
+		fmt.Sprint(pid), cwd)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
 
 // sessionMetaEntry is the subset of an OMP session record needed for the
 // chips — identical shape to the legacy lane's parser. A model_change role
@@ -52,6 +166,7 @@ type hcSessionMeta struct {
 
 type sessionMetaState struct {
 	dir      string
+	dirPid   int64 // foreground pid the resolved dir belongs to
 	file     string
 	offset   int64
 	modTime  time.Time

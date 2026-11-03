@@ -365,7 +365,15 @@ func (w *Watcher) poll(ctx context.Context) {
 		argv := full.AgentArgv()
 		role, model, effort := AgentFlags(argv)
 		if a.Agent == "omp" {
-			if dir := SessionDir(argv); dir != "" {
+			// Window tabs launch `omp` bare — no --session-dir in argv —
+			// so resolve the dir from the foreground process (lsof on
+			// the live pid, else the cwd→slug convention) before giving
+			// up on the JSONL scan.
+			dir := SessionDir(argv)
+			if dir == "" {
+				dir = w.agentSessionDirFor(ctx, a.TerminalID, full)
+			}
+			if dir != "" {
 				meta := w.sessionMetaFor(ctx, a.TerminalID, dir)
 				if meta.roleLive {
 					role = meta.role
