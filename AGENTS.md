@@ -128,3 +128,8 @@
 - Federation: `hc ls machines[]` rides the inventory so the frontend can
   fold `<machine>/<suffix>` mirror aliases onto the owning relay's cards.
   `applyHcInventory` must copy every new message field it adds.
+  **`ID_PATTERN` (resource-id.ts) MUST accept `/`** — federated
+  `machine/addr` pane/terminal ids built a null target tuple client-side
+  before v1.0.39: reads silently no-opped and leases failed "no exact
+  terminal identity". Remote `machine/addr` pane reads always use plain
+  `hc read` (attach replay over federation is seconds per frame).
