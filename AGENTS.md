@@ -189,3 +189,11 @@
     scores candidates by match length so a true boundary (matches all
     retained rows) beats a coincidental repeat. Both fixes together end
     the 127↔150-row oscillation measured in `tests/scroll-harness/`.
+- **Unclosed `?2026` brackets must not starve the grid** (v1.0.44):
+  sync buffering trusted the bracket to close; some herdr-core attaches
+  emit `?2026l` and never `?2026h`, so the whole stream buffered and
+  `serialize()` returned empty → plain-read fallback → monochrome.
+  `snapshot()` now calls `emu.flushSync()` unconditionally on the quiet
+  path (quiet = repaint done, drain held sync) and on the deadline path.
+  Rule: any content-hold keyed on an input marker needs a reader-driven
+  flush, because the close marker may simply never arrive.
