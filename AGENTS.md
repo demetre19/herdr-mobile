@@ -104,9 +104,15 @@
   workers and finished shells as terminals — merging them while the
   window is open renders dead processes as cards; with the window
   closed, `regroupLabeledTerminals` rebuilds real spaces from
-  `herdr.space`/`herdr.tab`/`ofm.tab_label`/`where` labels and only
-  unlabeled workers land in synthetic `hc-core:<address>` spaces
-  (which MUST be appended to `snap.Spaces`).
+  `herdr.space`/`herdr.tab`/`ofm.tab_label`/`where` labels
+  (`ofm.space`/`ofm.tab` when the herdr.* ids are absent — lanes mount
+  via ofm only). Unlabeled terminals never land in `hc-core:` synthetic
+  spaces at all (v1.0.40): `hc`'s detached `add-*` workers and stray
+  shells are invisible in the app, so the flat fallback skips them
+  rather than minting cards; the synthetic-space shape stays as a
+  contract but normally never ships. Never `hc get` a terminal just to
+  decide whether to show it — remote `machine/addr` Gets cost a
+  federation round-trip each.
 - `hc_launch` mounts a tab+terminal in the open window: `handleHcLaunch`
   resolves `profile_id` through `profiles.Resolver.Profile().Argv` (same
   catalog as `agent_start`), then `Client.TabNew`. **`tab.new` lands in the
