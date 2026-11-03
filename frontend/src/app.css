@@ -484,6 +484,7 @@ textarea { min-height: 6.5rem; resize: vertical; }
 .agent-section { margin-bottom: 1.1rem; }
 .section-heading { align-items: center; color: var(--muted); display: flex; font-size: .72rem; gap: .45rem; letter-spacing: .08em; margin: 0 0 .45rem .25rem; text-transform: uppercase; }
 .section-count { background: var(--secondary); border-radius: 999px; color: var(--muted); font-size: .62rem; letter-spacing: 0; margin-left: auto; padding: .08rem .38rem; }
+.machine-heading { color: var(--accent, #ff8a4c); font-size: .66rem; letter-spacing: .1em; margin: .7rem 0 .3rem .35rem; text-transform: uppercase; }
 .agent-grid { display: grid; gap: .55rem; }
 .agent-card { background: var(--card); border: 1px solid var(--border); border-radius: .625rem; overflow: hidden; }
 .agent-card.blocked { border-color: color-mix(in srgb, var(--danger) 65%, var(--border)); }

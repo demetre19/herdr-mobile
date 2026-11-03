@@ -47,6 +47,7 @@ export const WORKSPACE_DISCLOSURE_KEY = 'herdr_workspace_disclosure';
 // separate key — AgentList writes the legacy map wholesale and would clobber
 // hc entries on a shared key.
 export const HC_DISCLOSURE_KEY = 'herdr_hc_disclosure';
+export const PINNED_HC_SPACES_KEY = 'herdr_pinned_hc_spaces';
 export const DEFAULT_DIRECTORY_KEY = 'herdr_default_directory';
 export const DIRECTORY_USAGE_KEY = 'herdr_directory_usage';
 export const FAVORITE_AGENT_KEY = 'herdr_favorite_agent';

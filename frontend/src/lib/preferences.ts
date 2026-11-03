@@ -13,6 +13,7 @@ import {
   PANE_AGENT_VIEW_OVERRIDES_KEY,
   PINNED_CONVERSATIONS_KEY,
   PINNED_WORKSPACES_KEY,
+  PINNED_HC_SPACES_KEY,
   WORKSPACE_DISCLOSURE_KEY,
   LEGACY_FONT_KEY,
   HOME_LAYOUT_KEY,
@@ -622,6 +623,63 @@ export function persistHcDisclosure(map: Record<string, boolean>): 'saved' | 'un
     return 'unavailable';
   }
   return 'saved';
+}
+
+// --- Pinned hc spaces ---------------------------------------------------------
+// Keys are `hc:<relayId>:<space.id>` — namespaced per relay so a space pin can
+// never collide with a legacy workspace pin or a conversation pane id.
+
+export function readPinnedHcSpaces(storage?: Pick<Storage, 'getItem'>): string[] {
+  try {
+    const raw = (storage || localStorage).getItem(PINNED_HC_SPACES_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((key): key is string => typeof key === 'string' && key.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+export const pinnedHcSpaces = writable<string[]>(readPinnedHcSpaces());
+
+export function togglePinnedHcSpace(key: string): 'saved' | 'unavailable' {
+  if (!key) return 'unavailable';
+  const current = get(pinnedHcSpaces);
+  const next = current.includes(key)
+    ? current.filter((entry) => entry !== key)
+    : [...current, key];
+  try {
+    if (next.length) localStorage.setItem(PINNED_HC_SPACES_KEY, JSON.stringify(next));
+    else localStorage.removeItem(PINNED_HC_SPACES_KEY);
+  } catch {
+    return 'unavailable';
+  }
+  pinnedHcSpaces.set(next);
+  return 'saved';
+}
+
+/**
+ * Drop hc-space pins whose space no longer exists on a connected relay. Pins
+ * on relays with no live inventory are kept — the relay may be disconnected,
+ * and a revived pin is better than silently losing the user's arrangement.
+ */
+export function prunePinnedHcSpaces(liveKeys: ReadonlySet<string>, connectedRelayIds: ReadonlySet<string>): void {
+  const current = get(pinnedHcSpaces);
+  if (!current.length) return;
+  const next = current.filter((key) => {
+    const relayId = key.slice('hc:'.length, key.indexOf(':', 'hc:'.length));
+    if (!connectedRelayIds.has(relayId)) return true;
+    return liveKeys.has(key);
+  });
+  if (next.length === current.length) return;
+  try {
+    if (next.length) localStorage.setItem(PINNED_HC_SPACES_KEY, JSON.stringify(next));
+    else localStorage.removeItem(PINNED_HC_SPACES_KEY);
+  } catch {
+    return;
+  }
+  pinnedHcSpaces.set(next);
 }
 
 // --- Per-relay default directory (FR3) ---------------------------------------
