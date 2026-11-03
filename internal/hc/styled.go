@@ -73,10 +73,14 @@ func colorParam(c, base int) string {
 		return fmt.Sprintf(";%d;2;%d;%d;%d", base, v>>16&255, v>>8&255, v&255)
 	}
 	if c < 8 {
-		return fmt.Sprintf(";%d", base+c)
+		// base is 38/48; standard indexed SGR is 30-37/40-47 — base-8,
+		// NOT base+c (38+4 would emit 42, which the reader parses as
+		// bg-green — the green/red "boat" bug).
+		return fmt.Sprintf(";%d", base-8+c)
 	}
 	if c < 16 {
-		return fmt.Sprintf(";%d", base+60+c-8)
+		// Bright indexed: 90-97 fg / 100-107 bg = base+52 + (c-8).
+		return fmt.Sprintf(";%d", base+52+c-8)
 	}
 	return fmt.Sprintf(";%d;5;%d", base, c)
 }

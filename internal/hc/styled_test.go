@@ -123,3 +123,23 @@ func TestRenderVTWideRunesKeepAlignment(t *testing.T) {
 		t.Fatalf("wide runes lost: %q", out)
 	}
 }
+
+func TestColorParamIndexedOffsets(t *testing.T) {
+	// Regression: colorParam wrote base+c for standard indexed colors,
+	// so fg 4 serialized as 42 — which the reader parses as BG green
+	// (the green/red "boat" bug where a blue sea rendered as slabs).
+	cases := []struct{ c, base int; want string }{
+		{4, 38, ";34"},   // fg blue
+		{3, 38, ";33"},   // fg yellow (the boat)
+		{1, 48, ";41"},   // bg red
+		{12, 38, ";94"},  // bright fg blue
+		{9, 48, ";101"},  // bright bg red
+		{200, 38, ";38;5;200"},
+		{1<<24 | 0x77<<16 | 0xF5<<8 | 0x6C, 48, ";48;2;119;245;108"},
+	}
+	for _, tc := range cases {
+		if got := colorParam(tc.c, tc.base); got != tc.want {
+			t.Fatalf("colorParam(%d,%d) = %q, want %q", tc.c, tc.base, got, tc.want)
+		}
+	}
+}
