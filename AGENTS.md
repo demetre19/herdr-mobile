@@ -217,3 +217,13 @@
   federated `space.machine` under an `@<machine>` heading
   (`machineGroups`), the boundary that keeps remote cards from blending
   into local. E2E: `tests/scroll-harness/hc-pin.mjs` 7/7.
+- **Federated panes must never hold a persistent attach** (v1.0.49):
+  `hc attach --observe machine/<t>` streams the pane's output over SSH
+  forever and the OWNING machine's hc-launchd burns sustained CPU
+  serving it while the phone is connected. Remote ansi reads take the
+  bounded `hc read` path (`hc.IsRemoteAddress` gate in hcReadPane;
+  local panes keep the observer). Remote pane watches floor at
+  `hcRemoteWatchFloor` (2s) by skipping ticks inside the fixed ticker —
+  the read IS the remote RPC, so skipping is the only throttle that
+  works. `hcMetaRemoteRefresh` is 300s: `hc exec --on` round-trips are
+  amortized, model chips change rarely.
