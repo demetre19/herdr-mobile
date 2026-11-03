@@ -142,26 +142,30 @@ esac`
 }
 
 func TestPollCoreFallbackWhenWindowClosed(t *testing.T) {
-	// herdr-app fails (window closed) → live core terminals become the
-	// inventory; finished ones are still noise.
+	// herdr-app fails (window closed) → terminals carrying space labels
+	// regroup into their real spaces; everything the app would not show
+	// (unlabeled workers, finished shells) is hidden, not core-carded.
 	app := "#!/bin/sh\nexit 1"
 	core := `#!/bin/sh
 case "$1" in
 server) echo '{"core":{"id":"c1","name":"mac-mini"},"version":"0.1.16"}' ;;
 ls) echo '{"machines":[],"terminals":[
 	{"address":"t1","agent":"hc","cwd":"/Users/apple","name":"add-jump","state":"live"},
+	{"address":"t2f","agent":"omp","cwd":"/Users/apple","name":"boss","state":"live"},
 	{"address":"t12","agent":"zsh","cwd":"/Users/apple","state":"finished"}]}' ;;
-get) echo '{"address":"'$2'","agent":"hc","cwd":"/Users/apple","state":"live"}' ;;
+get) echo '{"address":"'$2'","agent":"omp","cwd":"/Users/apple","state":"live","labels":{"herdr.space":"spa1","herdr.tab":"tb1","ofm.tab_label":"THE BOSS","where":"of-machinery / THE BOSS"}}' ;;
 esac`
 	w := NewWatcher(fakeHcBins(t, app, core), "mac-mini", slog.Default())
 	w.poll(context.Background())
 
 	snap := w.Current()
-	if len(snap.Agents) != 1 || snap.Agents[0].TerminalID != "t1" {
-		t.Fatalf("agents = %v, want live-only [t1]", paneIDs(snap.Agents))
+	// t2f's labels only exist behind `hc get`, which the fallback filter
+	// must not block on — unlabeled and finished are both hidden.
+	if len(snap.Agents) != 0 {
+		t.Fatalf("agents = %v, want all hidden", paneIDs(snap.Agents))
 	}
-	if len(snap.Spaces) != 1 || snap.Spaces[0].ID != "hc-core:t1" {
-		t.Fatalf("spaces = %v, want [hc-core:t1]", snap.Spaces)
+	if len(snap.Spaces) != 0 {
+		t.Fatalf("spaces = %v, want none", snap.Spaces)
 	}
 	if snap.Message == "" {
 		t.Fatal("window-closed message missing")
@@ -290,15 +294,16 @@ esac`
 	if !names["L706"] || !names["THE BOSS"] {
 		t.Fatalf("tabs = %+v", space.Tabs)
 	}
-	// The label-less worker stays in Core terminals.
-	var coreSpace bool
-	for _, sp := range snap.Spaces {
-		if sp.ID == "hc-core:t1" {
-			coreSpace = true
+	// The label-less worker is hidden — the app never shows it either.
+	for _, a := range snap.Agents {
+		if a.TerminalID == "t1" {
+			t.Fatalf("unlabeled worker leaked: %+v", a)
 		}
 	}
-	if !coreSpace {
-		t.Fatalf("unlabeled worker lost: %+v", snap.Spaces)
+	for _, sp := range snap.Spaces {
+		if strings.HasPrefix(sp.ID, "hc-core:") {
+			t.Fatalf("synthetic core space leaked: %+v", sp)
+		}
 	}
 	// Agents carry the synthesized workspace/tab identity.
 	byTerm := map[string]*coordinator.AgentState{}

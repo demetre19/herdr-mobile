@@ -293,15 +293,24 @@ func (w *Watcher) poll(ctx context.Context) {
 			}
 		}
 	}
-	// The app view mirrors what the window mounts — detached core workers
-	// (hc's own add-* jobs, finished shells) must NOT appear alongside real
-	// spaces; hc ls still lists them as "live" long after their work ended.
-	// The flat fallback only runs for a closed/unreachable window, and
-	// even then finished terminals are noise, not content.
+	// The app view mirrors what the window mounts. With the window
+	// unreachable, mount state comes from labels: terminals carrying
+	// herdr.space/ofm.space are regrouped below; anything else live in
+	// the core (hc's own add-* jobs, stray shells) is invisible in the
+	// app, so it stays off the phone too.
 	if topoErr != nil {
 		for i := range terminals {
 			t := &terminals[i]
 			if seen[t.Address] || t.State != "live" {
+				continue
+			}
+			labels := labelsByAddr[t.Address]
+			if labels == nil {
+				if full := byAddress[t.Address]; full != nil {
+					labels = full.Labels
+				}
+			}
+			if labels["herdr.space"] == "" && labels["ofm.space"] == "" {
 				continue
 			}
 			space := Space{ID: "hc-core:" + t.Address, Name: "Core terminals", Tabs: []Tab{{
@@ -432,11 +441,12 @@ func (w *Watcher) poll(ctx context.Context) {
 }
 
 // regroupLabeledTerminals rebuilds window-faithful space/tab groups from
-// terminal labels when the app window is unreachable. Agents synthesized
-// as flat hc-core cards that carry herdr.space move into a shared space
-// group keyed on the space id; tab rows come from herdr.tab/ofm.tab_label
-// and the space name from the `where` label's left half. Label-less
-// workers (hc's own add-* jobs) keep the flat Core terminals bucket.
+// terminal labels when the app window is unreachable. Terminals carrying
+// herdr.space (mounted tabs) or ofm.space (of-machinery lanes) move into
+// shared space groups keyed on the space id; tab rows come from
+// herdr.tab/ofm.tab + ofm.tab_label, space names from the `where`
+// label's left half. Label-less terminals are filtered upstream — the
+// app never shows unmounted workers, so the phone does not either.
 func regroupLabeledTerminals(
 	spaces []Space,
 	agents []*coordinator.AgentState,
@@ -455,6 +465,11 @@ func regroupLabeledTerminals(
 		labels := labelsByAddr[a.TerminalID]
 		spaceID := labels["herdr.space"]
 		if spaceID == "" {
+			// of-machinery lanes mount via ofm.* labels only — group them
+			// under the ofm space id so they land beside their window tabs.
+			spaceID = labels["ofm.space"]
+		}
+		if spaceID == "" {
 			continue
 		}
 		if _, ok := tabsBySpace[spaceID]; !ok {
@@ -465,6 +480,9 @@ func regroupLabeledTerminals(
 			}
 		}
 		tabID := labels["herdr.tab"]
+		if tabID == "" {
+			tabID = labels["ofm.tab"]
+		}
 		if tabID == "" {
 			tabID = a.TerminalID
 		}
