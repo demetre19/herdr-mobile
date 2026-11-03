@@ -155,3 +155,14 @@
   row stamps across the region), and the SGR operand loop must stay an
   indexed loop so `38;2;r;g;b`/`48` skip their operands (range-int loops
   can't seek).
+- **Styled hc panes stream from persistent attach observers** (v1.0.42):
+  `hcStyledContent` spawns ONE `hc attach --observe` per terminal
+  (`Client.Observe`/`AttachObserver`, `internal/hc/observer.go`) feeding
+  the VT emulator continuously; reads serialize the live grid (~10ms
+  first paint, ~0ms after) — a genuine live stream. Collect-per-read
+  died on busy panes: output never went quiet, every read burned the 8s
+  deadline → ~9.5s-stale frames → phone timeout → "send buffer full,
+  evicting client" churn. Dead children respawn lazily (5s floor); idle
+  observers reap at 90s; mid-stream `ESC[8;r;c t` reports rebuild the
+  grid; a paint-less attach death falls back to plain `hc read`. The
+  old `ReadStyled`/lockedBuffer/quiet-detection path is gone.
