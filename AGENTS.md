@@ -227,3 +227,16 @@
   the read IS the remote RPC, so skipping is the only throttle that
   works. `hcMetaRemoteRefresh` is 300s: `hc exec --on` round-trips are
   amortized, model chips change rarely.
+- **Two v1.0.50 hc-lane fixes** (2026-11-04, commit `540cc31`):
+  - **Observer emu must use the pane's REAL dims** — `spawn()` built
+    the grid with `max(rows, styledDefaultRows)`, so any pane shorter
+    than 50 rows serialized phantom blank rows under its live edge;
+    the phone's bottom pin landed on dead space ("screen starts
+    really high"). `newEmu()` fills defaults for UNKNOWN dims only.
+    Live check `TestObserveShortPaneNoPadding` (HC_LIVE_SMOKE=1).
+  - **Empty federated machine blocks render nothing** — `machineGroups`
+    now emits only spaces with visible unpinned rows. When every
+    terminal in a remote block is deduped (owning relay publishes them
+    bare), the old code still drew a bare `@<machine>` heading over
+    nothing — the stray @MACMINI/@MACBOOKPRO-CODEX markers. E2E
+    `hc-pin.mjs` 8/8 covers suppression.
