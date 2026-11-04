@@ -240,3 +240,20 @@
     bare), the old code still drew a bare `@<machine>` heading over
     nothing — the stray @MACMINI/@MACBOOKPRO-CODEX markers. E2E
     `hc-pin.mjs` 8/8 covers suppression.
+- **The `done` channel is non-nil for an attach's WHOLE life — it's
+  only CLOSED when the child exits** (v1.0.51, commit `f3aa5e3`):
+  `alive()` returned `done == nil`, so every spawned observer read as
+  dead → `observerFor` deleted + respawned the `hc attach` on EVERY
+  `Observe` (each 250ms watch tick minted a fresh herdr-core and
+  orphaned the old one — the reported ~98% CPU per stream). `reap`
+  exited instantly on the same inverted check, so idle attaches were
+  never reaped. Fix: `dead()` tests the closed channel; respawn/reap/
+  Observe dead-checks use it; `observerIdleTTL` 90s→30s (auto-close
+  after inactivity); `observerMaxConcurrent=3` LRU cap bounds
+  watched-pane attach cost; `hcStyledContent` takes dims from the
+  watcher's events-fed records (no per-tick `hc get` subprocess);
+  `Client.Close()` kills observers on shutdown. Measured: `hc attach`
+  on a BUSY pane costs ~1 core inside herdr-core itself (upstream
+  cost) — the relay bounds count+lifetime, it can't fix the stream.
+  Tests: `TestObserverCapEvictsOldest`, `TestObserveSharesOneAttach`
+  (HC_LIVE_SMOKE, one attach across repeated reads).
