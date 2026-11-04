@@ -23,9 +23,14 @@ await page.waitForTimeout(300);
 const pinCount = await page.locator('.workspace-card summary .workspace-pin:not(.pinned)').count();
 check('space summaries show pin button', pinCount >= 3, `count=${pinCount}`);
 
-// 2) Remote machine spaces sit under an @<machine> heading.
+// 2) Remote machine spaces sit under an @<machine> heading — but ONLY
+// when the block has visible spaces. DESKTOP's inventory mirrors
+// macbookpro-codex/t147 as a qualified terminal; the dedupe hides that
+// card (LAPTOP published the same address first), so DESKTOP's remote
+// block is empty and must not emit a heading.
 const headings = await page.locator('.machine-heading').allTextContents();
 check('remote machine heading rendered', headings.some((t) => t.includes('@macbookpro-codex')), headings.join(','));
+check('heading count is 1 (empty block suppressed)', headings.filter((t) => t.includes('@')).length === 1, headings.join(','));
 
 // 3) No Pinned section yet.
 check('no pinned section initially', await page.locator('section[aria-label="Pinned"]').count() === 0);

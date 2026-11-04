@@ -44,14 +44,14 @@ type AttachObserver struct {
 	cols, rows int
 	scrollCap  int
 
-	mu        sync.Mutex
-	emu       *vtEmu
-	lastSpawn time.Time
-	started   bool
-	fed       chan struct{} // closed on first bytes
-	spawnErr  error
-	cancel    context.CancelFunc
-	lastTouch time.Time
+	mu         sync.Mutex
+	emu        *vtEmu
+	lastSpawn  time.Time
+	started    bool
+	fed        chan struct{} // closed on first bytes
+	spawnErr   error
+	cancel     context.CancelFunc
+	lastTouch  time.Time
 	done       chan struct{}
 	lastFeed   time.Time // last pump chunk fed into emu
 	lastSnapAt time.Time // when snap was serialized
@@ -231,20 +231,36 @@ func (o *AttachObserver) markDone() {
 	o.mu.Unlock()
 }
 
-// spawn launches `hc attach --observe` and feeds its byte stream into a
-// fresh emulator. The child's own context is killed on server shutdown
-// or after observerIdleTTL without a snapshot.
-func (o *AttachObserver) spawn(c *Client) {
-	o.mu.Lock()
-	cols, rows, cap := o.cols, o.rows, o.scrollCap
-	emu := &vtEmu{cols: max(cols, styledDefaultCols), rows: max(rows, styledDefaultRows)}
+// newEmu builds the observer's emulator at the pane's real dims.
+// Defaults fill UNKNOWN dims only — never raise a real smaller pane:
+// an inflated grid pads the serialized frame with blank rows under the
+// app's live edge and the phone's bottom pin lands on dead space (the
+// "screen starts high" bug on short panes).
+func newEmu(cols, rows, scrollCap int) *vtEmu {
+	if cols <= 0 {
+		cols = styledDefaultCols
+	}
+	if rows <= 0 {
+		rows = styledDefaultRows
+	}
+	emu := &vtEmu{cols: cols, rows: rows}
 	emu.marginBot = emu.rows - 1
 	emu.attr.fg, emu.attr.bg = -1, -1
 	emu.grid = make([][]vtCell, emu.rows)
 	for i := range emu.grid {
 		emu.grid[i] = make([]vtCell, emu.cols)
 	}
-	emu.scrollCap = cap
+	emu.scrollCap = scrollCap
+	return emu
+}
+
+// spawn launches `hc attach --observe` and feeds its byte stream into a
+// fresh emulator. The child's own context is killed on server shutdown
+// or after observerIdleTTL without a snapshot.
+func (o *AttachObserver) spawn(c *Client) {
+	o.mu.Lock()
+	cols, rows, cap := o.cols, o.rows, o.scrollCap
+	emu := newEmu(cols, rows, cap)
 	o.emu = emu
 	o.fed = make(chan struct{})
 	o.done = nil

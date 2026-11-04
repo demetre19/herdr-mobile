@@ -65,9 +65,16 @@
     ],
   };
 
+  // DESKTOP mirrors the real deployment: its window also mounts the remote
+  // machine's space, so its inventory carries a qualified
+  // `macbookpro-codex/t147` terminal plus a `machine`-tagged space. The
+  // federation dedupe hides that card in favour of LAPTOP's — leaving the
+  // remote space with zero visible rows. A machine heading must NOT render
+  // for it (the stray @MACBOOKPRO-CODEX markers the phone showed).
   const desktopInv: HcInventory = {
     state: 'ready',
     server_id: 'desktop',
+    machines: ['macbookpro-codex'],
     spaces: [
       {
         id: 'sp-desk',
@@ -77,8 +84,17 @@
           { id: 'tab3', name: 'api', terminals: [{ terminal: 't2', pane: 't2' }] as never },
         ],
       },
+      {
+        id: 'sp-desk-remote',
+        name: 'of-machinery',
+        folder: '/tmp/ofm',
+        machine: 'macbookpro-codex',
+        tabs: [
+          { id: 'tab4', name: 'of-machinery', terminals: [{ terminal: 'macbookpro-codex/t147', pane: 'macbookpro-codex/t147' }] as never },
+        ],
+      },
     ],
-    agents: [agent('desktop', 't2', 'api')],
+    agents: [agent('desktop', 't2', 'api'), agent('desktop', 'macbookpro-codex/t147', 'of-machinery')],
   };
 
   relayStore.hcInventories.set(new Map([
@@ -100,6 +116,7 @@
     update: { state: 'current', current_version: '', current_revision: '', available_version: '', available_revision: '', target_revision: '', upstream_version: '', upstream_revision: '', checked_at: 0, can_install: false, mode: '', reason: '', error: '' },
     appDeploy: { configured: false, origin: '', project: '', branch: '', revision: '', reason: '', state: 'idle', target_version: '', target_revision: '', checked_at: 0, error: '' },
     inventory: { state: 'ready', errorCode: '', message: '', lastAttemptAt: 0, lastSuccessAt: 0, stale: false },
+    capabilities: [],
     herdrStatus: { installed_client_version: '', server_version: '', server_protocol: 0, server_protocol_known: false, endpoint_protocol_generation: null, generation: 0, features: {} },
     authRejected: false,
     pairingRequired: false,

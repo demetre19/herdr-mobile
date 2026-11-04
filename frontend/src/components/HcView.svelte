@@ -257,23 +257,36 @@
     return agents;
   }
 
-  // Group a section's window spaces by owning machine: local spaces
-  // (machine unset) first, then one block per federated machine — the
-  // visual boundary that keeps "laptop" and "desktop" cards apart.
-  function machineGroups(section: { inventory: HcInventory }): { machine: string; spaces: HcSpace[] }[] {
-    const windowSpaces = (section.inventory.spaces || []).filter((s) => !isCoreSpace(s));
-    const local = windowSpaces.filter((s) => !s.machine);
-    const byMachine = new Map<string, HcSpace[]>();
-    for (const space of windowSpaces) {
-      if (!space.machine) continue;
-      const list = byMachine.get(space.machine) || [];
-      list.push(space);
-      byMachine.set(space.machine, list);
+  // Group a section's VISIBLE window spaces by owning machine: local
+  // spaces (machine unset) first, then one block per federated machine —
+  // the visual boundary that keeps "laptop" and "desktop" cards apart.
+  // A space contributes only when it has visible rows and isn't pinned
+  // (pinned spaces render in the Pinned section instead). A machine
+  // block whose every space was hidden — e.g. the owning relay already
+  // publishes those terminals bare, so the dedupe hid all their cards —
+  // emits nothing: a bare @machine heading over empty space reads as a
+  // stray marker, not a boundary.
+  function machineGroups(section: { inventory: HcInventory; relayId: string }): { machine: string; groups: HcSpaceGroup[] }[] {
+    const byAddress = agentsByAddress(section.inventory.agents);
+    const local: HcSpaceGroup[] = [];
+    const byMachine = new Map<string, HcSpaceGroup[]>();
+    for (const space of (section.inventory.spaces || []).filter((s) => !isCoreSpace(s))) {
+      const rows = spaceRows(space, byAddress, section.relayId);
+      const key = `hc:${section.relayId}:${space.id}`;
+      if (!rows.length || pinnedSpaces.has(key)) continue;
+      const group: HcSpaceGroup = { key, space, relayId: section.relayId, rows };
+      if (!space.machine) {
+        local.push(group);
+      } else {
+        const list = byMachine.get(space.machine) || [];
+        list.push(group);
+        byMachine.set(space.machine, list);
+      }
     }
-    const out: { machine: string; spaces: HcSpace[] }[] = [];
-    if (local.length) out.push({ machine: '', spaces: local });
-    for (const [machine, spaces] of [...byMachine.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-      out.push({ machine, spaces });
+    const out: { machine: string; groups: HcSpaceGroup[] }[] = [];
+    if (local.length) out.push({ machine: '', groups: local });
+    for (const [machine, groups] of [...byMachine.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      out.push({ machine, groups });
     }
     return out;
   }
@@ -524,44 +537,43 @@
           {@const coreAgents = coreAgentsFor(section.inventory, byAddress, section.relayId)}
           <!-- Group window spaces by owning machine: local (no machine
                label) first, then one block per federated machine so a
-               laptop pane can never blend into the desktop's list. -->
+               laptop pane can never blend into the desktop's list.
+               machineGroups already dropped spaces with no visible rows,
+               so an empty machine block — every terminal deduped in
+               favour of the owning relay — renders nothing at all. -->
           {@const machineBlocks = machineGroups(section)}
           <div class="workspace-grid">
             {#each machineBlocks as block (block.machine || 'local')}
               {#if block.machine}
                 <h3 class="machine-heading" aria-label={`Remote machine ${block.machine}`}>@{block.machine}</h3>
               {/if}
-              {#each block.spaces as space (space.id)}
-                {@const rows = spaceRows(space, byAddress, section.relayId)}
-                {@const pinKey = `hc:${section.relayId}:${space.id}`}
-                {#if rows.length > 0 && !pinnedSpaces.has(pinKey)}
-                  {@const dKey = pinKey}
-                  <details class="workspace-card" open={disclosureOpen(dKey)} ontoggle={(event) => rememberDisclosure(dKey, event)}>
-                    <summary
-                      title="Hold to close this space."
-                      use:closePress={{ agent: rows[0].agent, kind: 'space', label: space.name || 'Space' }}
+              {#each block.groups as group (group.key)}
+                {@const dKey = group.key}
+                <details class="workspace-card" open={disclosureOpen(dKey)} ontoggle={(event) => rememberDisclosure(dKey, event)}>
+                  <summary
+                    title="Hold to close this space."
+                    use:closePress={{ agent: group.rows[0].agent, kind: 'space', label: group.space.name || 'Space' }}
+                  >
+                    <span class="agent-project">{group.space.name || 'Space'}</span>
+                    {#if group.space.machine}<span class="agent-count">@{group.space.machine}</span>{/if}
+                    <button
+                      type="button"
+                      class="workspace-pin"
+                      class:pinned={pinnedSpaces.has(group.key)}
+                      aria-pressed={pinnedSpaces.has(group.key)}
+                      aria-label={`Pin ${group.space.name || 'space'}`}
+                      title="Pin workspace to top"
+                      onclick={(event) => { event.preventDefault(); event.stopPropagation(); togglePinnedHcSpace(group.key); }}
                     >
-                      <span class="agent-project">{space.name || 'Space'}</span>
-                      {#if space.machine}<span class="agent-count">@{space.machine}</span>{/if}
-                      <button
-                        type="button"
-                        class="workspace-pin"
-                        class:pinned={pinnedSpaces.has(pinKey)}
-                        aria-pressed={pinnedSpaces.has(pinKey)}
-                        aria-label={`Pin ${space.name || 'space'}`}
-                        title="Pin workspace to top"
-                        onclick={(event) => { event.preventDefault(); event.stopPropagation(); togglePinnedHcSpace(pinKey); }}
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path></svg>
-                      </button>
-                    </summary>
-                    <div class="agent-grid compact-agent-grid">
-                      {#each rows.filter((row) => !pinned.has(row.agent.pane_id)) as row (row.agent.pane_id)}
-                        {@render hcCard(row.agent, section.relayId, row.tab.name || null, false)}
-                      {/each}
-                    </div>
-                  </details>
-                {/if}
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 17v5M9 4h6l1 7 3 3H5l3-3z"></path></svg>
+                    </button>
+                  </summary>
+                  <div class="agent-grid compact-agent-grid">
+                    {#each group.rows.filter((row) => !pinned.has(row.agent.pane_id)) as row (row.agent.pane_id)}
+                      {@render hcCard(row.agent, group.relayId, row.tab.name || null, false)}
+                    {/each}
+                  </div>
+                </details>
               {/each}
             {/each}
 
