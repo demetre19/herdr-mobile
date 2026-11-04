@@ -12,8 +12,8 @@ import (
 	"github.com/0cv/herdr-mobile-relay/internal/hc"
 	"github.com/0cv/herdr-mobile-relay/internal/history"
 	"github.com/0cv/herdr-mobile-relay/internal/protocol"
-	"github.com/0cv/herdr-mobile-relay/internal/question"
 	"github.com/0cv/herdr-mobile-relay/internal/push"
+	"github.com/0cv/herdr-mobile-relay/internal/question"
 	"github.com/0cv/herdr-mobile-relay/internal/slashcmd"
 	"github.com/0cv/herdr-mobile-relay/internal/transport"
 	"github.com/0cv/herdr-mobile-relay/internal/workspace"
@@ -230,11 +230,21 @@ func (s *Server) hcReadPane(ctx context.Context, message map[string]any) map[str
 // instant serialize of the live grid — no per-poll collect, and the
 // phone sees genuinely live output instead of deadline-stale frames.
 func (s *Server) hcStyledContent(ctx context.Context, address string, lines int) (string, error) {
-	// Dimensions come from `hc get` (the replay's size report is
-	// unreliable); the observer keeps them pinned until they change.
+	// Dimensions come from the watcher's events-fed record store — the
+	// stream already carries cols/rows, so a `hc get` here would mint a
+	// fresh herdr-core subprocess on EVERY watch tick (~4/sec per pane).
+	// `hc get` remains only as a cold-path fallback for a terminal the
+	// stream hasn't reported yet.
 	var cols, rows int
-	if term, gerr := s.hcC.Get(ctx, address); gerr == nil && term != nil {
-		cols, rows = term.Cols, term.Rows
+	if s.hcW != nil {
+		if term, ok := s.hcW.Terminal(address); ok && term != nil {
+			cols, rows = term.Cols, term.Rows
+		}
+	}
+	if (cols <= 0 || rows <= 0) && s.hcC != nil {
+		if term, gerr := s.hcC.Get(ctx, address); gerr == nil && term != nil {
+			cols, rows = term.Cols, term.Rows
+		}
 	}
 	content, err := s.hcC.Observe(ctx, address, cols, rows, lines)
 	if err != nil {

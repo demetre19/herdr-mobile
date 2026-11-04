@@ -53,12 +53,12 @@ type Watcher struct {
 	dirtyAddrs map[string]bool
 	streamLive bool
 	// pollMu serializes interval ticks and event-wake polls.
-	pollMu  sync.Mutex
+	pollMu sync.Mutex
 	// wake fires poll ahead of the interval after any event, debounced so a
 	// spinner-title burst collapses into one rebuild.
-	wake       chan struct{}
-	wakeTimer  *time.Timer
-	lastPoll   time.Time
+	wake      chan struct{}
+	wakeTimer *time.Timer
+	lastPoll  time.Time
 	// wakeMu covers wakeTimer/lastPoll (the AfterFunc fires off the Run
 	// goroutine).
 	wakeMu sync.Mutex
@@ -72,15 +72,14 @@ const (
 	wakeMinInterval = 2 * time.Second
 )
 
-
 func NewWatcher(client *Client, hostname string, logger *slog.Logger) *Watcher {
 	return &Watcher{
-		client:   client,
-		hostname: hostname,
-		interval: 5 * time.Second,
+		client:     client,
+		hostname:   hostname,
+		interval:   5 * time.Second,
 		records:    map[string]*CoreTerminal{},
 		dirtyAddrs: map[string]bool{},
-		logger:   logger,
+		logger:     logger,
 	}
 }
 
@@ -112,6 +111,15 @@ func (w *Watcher) Agent(paneID string) (*coordinator.AgentState, bool) {
 		}
 	}
 	return nil, false
+}
+
+// Terminal returns the live record for a core address from the events-fed
+// store — dims, labels, foreground — without spawning `hc get`.
+func (w *Watcher) Terminal(address string) (*CoreTerminal, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	term, ok := w.records[address]
+	return term, ok
 }
 
 // Run polls until ctx ends. Poll failures keep the last good snapshot but mark

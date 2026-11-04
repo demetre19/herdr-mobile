@@ -23,7 +23,11 @@ import (
 // attach pays seconds per frame and the plain read stays the fast path.
 
 const (
-	observerIdleTTL    = 90 * time.Second
+	// observerIdleTTL bounds an attach's lifetime after its last read —
+	// `hc attach` costs a core while held, so an unattended observer must
+	// die fast (the user's ask: ~20–30s). Watched panes touch the observer
+	// every frame, so the TTL only fires after the last watcher leaves.
+	observerIdleTTL    = 30 * time.Second
 	observerRespawnMin = 5 * time.Second
 	observerReadChunk  = 32 << 10
 	// observerQuiet marks a coherent frame: repaint bursts (bracketed or
@@ -35,7 +39,54 @@ const (
 	// serving the last coherent frame anyway (or a torn one on the very
 	// first paint).
 	observerQuietMax = 150 * time.Millisecond
+	// observerMaxConcurrent bounds live attaches: `hc attach` on a busy
+	// pane costs ~1 core while held, so N watched panes must never burn N
+	// cores. Evicting the least-recently-touched observer when a new pane
+	// is requested keeps worst-case cost at observerMaxConcurrent cores —
+	// the evicted pane's next read respawns on demand.
+	observerMaxConcurrent = 3
 )
+
+// evictOverflowObservers kills the oldest live observers until at most
+// observerMaxConcurrent remain (excluding `keep`, the pane about to be
+// served). Callers hold observersMu; lastTouch marks recency.
+func (c *Client) evictOverflowObservers(keep string) {
+	live := 0
+	for addr, ob := range c.observers {
+		if addr != keep && ob.alive() {
+			live++
+		}
+	}
+	for live >= observerMaxConcurrent {
+		var oldestAddr string
+		var oldest time.Time
+		for addr, ob := range c.observers {
+			if addr == keep || !ob.alive() {
+				continue
+			}
+			if oldest.IsZero() || ob.lastTouch.Before(oldest) {
+				oldest, oldestAddr = ob.lastTouch, addr
+			}
+		}
+		if oldestAddr == "" {
+			return
+		}
+		c.observers[oldestAddr].kill()
+		delete(c.observers, oldestAddr)
+		live--
+	}
+}
+
+// Close kills every live observer attach — server shutdown calls this so
+// no `hc attach` child outlives the relay burning a core.
+func (c *Client) Close() {
+	c.observersMu.Lock()
+	defer c.observersMu.Unlock()
+	for addr, ob := range c.observers {
+		ob.kill()
+		delete(c.observers, addr)
+	}
+}
 
 // AttachObserver owns one `hc attach --observe` child plus the emulator
 // it feeds.
@@ -71,6 +122,10 @@ func (c *Client) observerFor(addr string, cols, rows, scrollCap int) *AttachObse
 		ob = nil
 	}
 	if ob == nil {
+		// A new live attach costs up to a core on a busy pane — evict the
+		// least-recently-served observer first so watched-pane count can
+		// never exceed observerMaxConcurrent.
+		c.evictOverflowObservers(addr)
 		ob = &AttachObserver{addr: addr, cols: cols, rows: rows,
 			scrollCap: scrollCap, lastTouch: time.Now()}
 		c.observers[addr] = ob
@@ -92,10 +147,23 @@ func (o *AttachObserver) dimsMatch(cols, rows int) bool {
 	return (cols <= 0 || o.cols == cols) && (rows <= 0 || o.rows == rows)
 }
 
+// dead reports whether the attach child has exited: `done` is created at
+// spawn and CLOSED by pump/markDone when the stream ends, so a closed
+// channel means dead — non-nil alone only means the child was spawned.
+// Misreading non-nil as dead respawned the attach on every Observe tick.
+func (o *AttachObserver) dead() bool {
+	select {
+	case <-o.done:
+		return true
+	default:
+		return false
+	}
+}
+
 func (o *AttachObserver) alive() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.done == nil
+	return !o.dead()
 }
 
 // Observe returns the terminal's current screen rendered as SGR-annotated
@@ -114,7 +182,7 @@ func (c *Client) Observe(ctx context.Context, addr string, cols, rows, scrollCap
 	if !ob.started {
 		ob.started = true
 		needSpawn = true
-	} else if ob.done != nil && time.Since(ob.lastSpawn) >= observerRespawnMin {
+	} else if ob.dead() && time.Since(ob.lastSpawn) >= observerRespawnMin {
 		needSpawn = true
 	}
 	ob.mu.Unlock()
@@ -150,7 +218,7 @@ func (c *Client) Observe(ctx context.Context, addr string, cols, rows, scrollCap
 	// is better off with the plain-read fallback than frozen output,
 	// so report the dead child instead of serving it.
 	ob.mu.Lock()
-	dead := ob.done != nil
+	dead := ob.dead()
 	ob.mu.Unlock()
 	if dead && !needSpawn {
 		return "", fmt.Errorf("hc attach %s: stream ended", addr)
@@ -357,12 +425,12 @@ func (o *AttachObserver) reap(cancel context.CancelFunc) {
 		case <-ticker.C:
 			o.mu.Lock()
 			idle := time.Since(o.lastTouch) > observerIdleTTL
-			done := o.done != nil
+			dead := o.dead()
 			o.mu.Unlock()
-			if done {
-				return
-			}
-			if idle {
+			if dead || idle {
+				// dead: the child already exited — just retire.
+				// idle past TTL: cancel the attach so an unattended
+				// observer can't burn a core forever.
 				cancel()
 				return
 			}

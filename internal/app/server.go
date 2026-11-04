@@ -1443,6 +1443,11 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	cancelRun()
+	if s.hcC != nil {
+		// Orphaned `hc attach` children outlive the relay and keep
+		// burning a core each — kill every observer on shutdown.
+		s.hcC.Close()
+	}
 	if s.dispatcher != nil {
 		s.dispatcher.CancelInflight()
 	}

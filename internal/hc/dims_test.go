@@ -28,3 +28,35 @@ func TestObserveShortPaneNoPadding(t *testing.T) {
 		t.Fatalf("serialized %d rows for a 35-row pane — grid inflated", len(rows))
 	}
 }
+
+// LRU eviction: creating a fourth live observer kills the least-recently
+// touched one so watched-pane count can never exceed the cap — each live
+// `hc attach` can burn a full core on a busy pane.
+func TestObserverCapEvictsOldest(t *testing.T) {
+	c := NewClient("", "hc")
+	touch := time.Now().Add(-time.Hour)
+	for _, addr := range []string{"t1", "t2", "t3"} {
+		ob := c.observerFor(addr, 0, 0, 0)
+		ob.mu.Lock()
+		ob.lastTouch = touch
+		ob.mu.Unlock()
+		touch = touch.Add(time.Minute)
+	}
+	c.observerFor("t4", 0, 0, 0)
+	c.observersMu.Lock()
+	live := []string{}
+	for addr, ob := range c.observers {
+		if ob.alive() {
+			live = append(live, addr)
+		}
+	}
+	c.observersMu.Unlock()
+	if len(live) != observerMaxConcurrent {
+		t.Fatalf("live observers = %v, want %d", live, observerMaxConcurrent)
+	}
+	for _, addr := range live {
+		if addr == "t1" {
+			t.Fatalf("t1 (oldest) survived eviction: %v", live)
+		}
+	}
+}
