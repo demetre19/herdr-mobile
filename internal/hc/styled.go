@@ -106,6 +106,13 @@ type vtEmu struct {
 	inSync               bool
 	syncBuf              []byte
 	pending              []byte
+	// inAlt marks the alternate screen buffer active. The TUI draws on
+	// a separate grid we save/restore so exiting it can't corrupt the
+	// main screen; scrollback stays shared, matching `hc read`.
+	inAlt                                  bool
+	savedMainGrid                          [][]vtCell
+	savedMainRow, savedMainCol             int
+	savedMainMarginTop, savedMainMarginBot int
 }
 
 // RenderVT replays a collected attach stream and returns the rendered
@@ -178,6 +185,62 @@ func bytes0Index(data, sep []byte) int {
 
 func (e *vtEmu) blank() vtCell { return vtCell{attr: e.attr} }
 
+// privateMode handles ?-prefixed DEC private modes that affect the
+// rendered grid — currently just the alternate screen buffer
+// (47/1047/1049). Everything else stays grid-neutral.
+func (e *vtEmu) privateMode(set bool, nums []int) {
+	for _, m := range nums {
+		switch m {
+		case 47, 1047, 1049:
+			if set {
+				e.altEnter()
+			} else {
+				e.altExit()
+			}
+		}
+	}
+}
+
+// altEnter swaps to a fresh alternate grid, saving the main grid and
+// cursor. Scrollback stays shared across both buffers (the TUI's
+// scrolled log is the history the phone reads back), so only the grid
+// and cursor swap here.
+func (e *vtEmu) altEnter() {
+	if e.inAlt {
+		return
+	}
+	e.inAlt = true
+	e.savedMainGrid = e.grid
+	e.savedMainRow, e.savedMainCol = e.row, e.col
+	e.savedMainMarginTop, e.savedMainMarginBot = e.marginTop, e.marginBot
+	e.grid = make([][]vtCell, e.rows)
+	for r := range e.grid {
+		e.grid[r] = e.freshRow()
+	}
+	e.row, e.col = 0, 0
+	e.marginTop, e.marginBot = 0, e.rows-1
+	e.wrapPend = false
+}
+
+// altExit restores the saved main grid and cursor.
+func (e *vtEmu) altExit() {
+	if !e.inAlt {
+		return
+	}
+	e.inAlt = false
+	if e.savedMainGrid != nil {
+		e.grid = e.savedMainGrid
+		e.savedMainGrid = nil
+	}
+	e.row = clamp(e.savedMainRow, 0, e.rows-1)
+	e.col = clamp(e.savedMainCol, 0, e.cols-1)
+	e.marginTop, e.marginBot = e.savedMainMarginTop, e.savedMainMarginBot
+	if e.marginTop >= e.marginBot {
+		e.marginTop, e.marginBot = 0, e.rows-1
+	}
+	e.wrapPend = false
+}
+
 // Synced-output (DEC ?2026) handling: full-screen apps wrap every repaint
 // in CSI ?2026l … CSI ?2026h so the display never shows a torn frame. The
 // relay snapshots the grid between watch ticks, so torn states are its
@@ -210,7 +273,7 @@ func (e *vtEmu) feed(data []byte) {
 					buf := e.syncBuf
 					e.syncBuf = nil
 					e.inSync = false
-						e.feedRaw(buf)
+					e.feedRaw(buf)
 				}
 				return
 			}
@@ -241,7 +304,6 @@ func (e *vtEmu) flushSync() {
 	e.syncBuf = nil
 	e.feedRaw(buf)
 }
-
 
 // feedRaw parses and applies one chunk. Incomplete sequences at the tail
 // park in e.pending and prepend to the next feed — the attach channel
@@ -389,7 +451,12 @@ func (e *vtEmu) csi(data []byte, i int) int {
 	final := data[i]
 	i++
 	if priv == '?' || priv == '>' {
-		// Mode sets, XTMODKEYS, probes — none affect the rendered grid.
+		// Mode sets, XTMODKEYS, probes — none affect the rendered grid,
+		// except the alternate screen: a TUI draws on a separate buffer
+		// we must swap in and out, not blend into the main grid.
+		if priv == '?' && (final == 'h' || final == 'l') {
+			e.privateMode(final == 'h', parseNums(params))
+		}
 		return i
 	}
 	nums := parseNums(params)
@@ -655,6 +722,9 @@ func (e *vtEmu) freshRow() []vtCell {
 
 func (e *vtEmu) scrollUp(n int) {
 	for range n {
+		// Scrollback is shared across main/alt like `hc read`'s linear
+		// model: the OMP TUI's scrolled log IS the history the phone
+		// reads back. Alt transitions only save/restore the grid.
 		if e.marginTop == 0 && len(e.scrollback) < e.scrollCap {
 			cp := make([]vtCell, e.cols)
 			copy(cp, e.grid[e.marginTop])

@@ -634,6 +634,9 @@ func agentRecord(hostname, serverID string, space Space, tab Tab, term Terminal,
 	if core != nil && core.Cwd != "" {
 		cwd = core.Cwd
 	}
+	if core != nil && core.Foreground != nil && core.Foreground.Cwd != "" {
+		cwd = core.Foreground.Cwd
+	}
 	title := ""
 	if core != nil {
 		title = core.Title

@@ -370,3 +370,33 @@ esac`
 		t.Fatalf("agent = status:%q role:%q tab:%q", a.Status, a.AgentRole, a.TabLabel)
 	}
 }
+
+// The card's folder must follow the LIVE foreground cwd, not the launch
+// cwd — a pane spawned in one project and navigated to another used to
+// keep the stale launch dir on the card (the "wrong folder" report).
+func TestAgentRecordPrefersForegroundCwd(t *testing.T) {
+	space := Space{ID: "sp1", Name: "Herdr Mobile"}
+	tab := Tab{ID: "tb1"}
+	term := Terminal{Address: "t1h"}
+	core := &CoreTerminal{
+		Address: "t1h",
+		Agent:   "omp",
+		Cwd:     "/Users/apple/Documents/UNCLUTTER-NEW/CLAUDE-DEV/Dents Direct/dents-direct-website",
+		State:   "live",
+	}
+	core.Foreground = &struct {
+		Argv []string `json:"argv"`
+		Name string   `json:"name"`
+		Pid  int64    `json:"pid"`
+		Cwd  string   `json:"cwd"`
+	}{Pid: 91347, Cwd: "/Users/apple/Documents/UNCLUTTER-NEW/CLAUDE-DEV/Herdr Mobile"}
+
+	agent := agentRecord("mac-mini", "core1", space, tab, term, core)
+	want := "/Users/apple/Documents/UNCLUTTER-NEW/CLAUDE-DEV/Herdr Mobile"
+	if agent.Cwd != want {
+		t.Fatalf("cwd = %q, want live foreground %q", agent.Cwd, want)
+	}
+	if agent.Project != "Herdr Mobile" {
+		t.Fatalf("project = %q, want Herdr Mobile", agent.Project)
+	}
+}

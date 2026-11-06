@@ -394,6 +394,8 @@ func (o *AttachObserver) pump(cmd *exec.Cmd, stdout io.Reader, emu *vtEmu) {
 				}
 				emu.row, emu.col = 0, 0
 				emu.scrollback = nil
+				emu.inAlt = false
+				emu.savedMainGrid = nil
 			}
 			emu.feed(chunk)
 			if o.fed != nil {
