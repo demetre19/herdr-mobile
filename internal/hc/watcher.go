@@ -51,6 +51,10 @@ type Watcher struct {
 	// records (labels, foreground, status) instead of per-terminal `hc get`.
 	records    map[string]*CoreTerminal
 	dirtyAddrs map[string]bool
+	// fgProbed marks live records whose missing foreground block we already
+	// paid one `hc get` for; cleared by snapshot/dirty events so a later
+	// upstream resolution gets another chance without per-poll churn.
+	fgProbed   map[string]bool
 	streamLive bool
 	// pollMu serializes interval ticks and event-wake polls.
 	pollMu sync.Mutex
@@ -79,6 +83,7 @@ func NewWatcher(client *Client, hostname string, logger *slog.Logger) *Watcher {
 		interval:   5 * time.Second,
 		records:    map[string]*CoreTerminal{},
 		dirtyAddrs: map[string]bool{},
+		fgProbed:   map[string]bool{},
 		logger:     logger,
 	}
 }
@@ -197,6 +202,12 @@ func (w *Watcher) onCoreEvent(event CoreEvent) {
 		for i := range event.Snapshot {
 			term := event.Snapshot[i]
 			w.records[term.Address] = &term
+			// A fresh record carries its own foreground state — forget
+			// the prior probe verdict so a lazy upstream resolution gets
+			// re-checked only when this record actually lacks it.
+			if term.Foreground != nil {
+				delete(w.fgProbed, term.Address)
+			}
 		}
 		w.streamLive = true
 	} else if w.streamLive {
@@ -204,6 +215,7 @@ func (w *Watcher) onCoreEvent(event CoreEvent) {
 			rec.Title = event.Title
 		} else if event.Terminal != "" && w.dirtyAddrs != nil {
 			w.dirtyAddrs[event.Terminal] = true
+			delete(w.fgProbed, event.Terminal)
 		}
 	}
 	w.mu.Unlock()
@@ -225,9 +237,19 @@ func (w *Watcher) poll(ctx context.Context) {
 	// lock, then poll without the lock held.
 	w.mu.Lock()
 	streamLive := w.streamLive
-	records := w.records
+	// Copy the map before iterating: onCoreEvent writes records under the
+	// same lock while this loop runs unlocked, and the enrich pass below
+	// writes fetched records back in (also under w.mu).
+	records := make(map[string]*CoreTerminal, len(w.records))
+	for addr, rec := range w.records {
+		records[addr] = rec
+	}
 	dirty := w.dirtyAddrs
 	w.dirtyAddrs = map[string]bool{}
+	probed := make(map[string]bool, len(w.fgProbed))
+	for addr := range w.fgProbed {
+		probed[addr] = true
+	}
 	w.wakeMu.Lock()
 	w.lastPoll = time.Now()
 	w.wakeMu.Unlock()
@@ -339,7 +361,8 @@ func (w *Watcher) poll(ctx context.Context) {
 	fetched := 0
 	for _, a := range agents {
 		full := byAddress[a.TerminalID]
-		needsGet := full == nil || dirty[a.TerminalID] || !streamLive
+		needsGet := full == nil || dirty[a.TerminalID] || !streamLive ||
+			(full.Foreground == nil && full.State == "live" && !probed[a.TerminalID])
 		if needsGet {
 			if fetched >= getLimit {
 				continue
@@ -350,9 +373,29 @@ func (w *Watcher) poll(ctx context.Context) {
 				continue
 			}
 			full = got
+			// Fetched records carry fields the stream snapshot lacked
+			// (foreground cwd resolves lazily upstream, so a record can sit
+			// at fg=null indefinitely). Merge them back into the store so
+			// the next poll rebuilds agents from the fresher record instead
+			// of freezing whatever the connect frame captured.
+			w.mu.Lock()
+			w.records[got.Address] = got
+			if got.Foreground == nil {
+				// Still nothing upstream — pay one get per dirty cycle,
+				// not one per poll.
+				w.fgProbed[got.Address] = true
+			}
+			w.mu.Unlock()
 		}
 		if full == nil {
 			continue
+		}
+		// cwd follows the enriched record, not only the stream store —
+		// a pane that cd'd after launch otherwise keeps its launch dir on
+		// the card forever.
+		if cwd := liveCwd(full, ""); cwd != "" {
+			a.Cwd = cwd
+			a.Project = filepath.Base(strings.TrimRight(cwd, "/"))
 		}
 		if len(full.Labels) > 0 {
 			labelsByAddr[full.Address] = full.Labels
@@ -591,6 +634,22 @@ func AgentFlags(argv []string) (role, model, effort string) {
 	return role, model, effort
 }
 
+// liveCwd is the card path: the foreground process's cwd when known
+// (tracks cd's after launch), else the pane's launch cwd, else the
+// caller's fallback (the space folder). Returning the fallback keeps
+// callers honest when the core record is absent entirely.
+func liveCwd(core *CoreTerminal, fallback string) string {
+	if core != nil {
+		if core.Foreground != nil && core.Foreground.Cwd != "" {
+			return core.Foreground.Cwd
+		}
+		if core.Cwd != "" {
+			return core.Cwd
+		}
+	}
+	return fallback
+}
+
 // agentRecord synthesizes the AgentState the phone consumes. Pane ids are
 // namespaced with hc: so they can never collide with legacy pane ids; the
 // hc <address> (which may itself be machine/tN for remote machines) is the
@@ -630,13 +689,7 @@ func agentRecord(hostname, serverID string, space Space, tab Tab, term Terminal,
 	if term.Name != nil {
 		name = *term.Name
 	}
-	cwd := space.Folder
-	if core != nil && core.Cwd != "" {
-		cwd = core.Cwd
-	}
-	if core != nil && core.Foreground != nil && core.Foreground.Cwd != "" {
-		cwd = core.Foreground.Cwd
-	}
+	cwd := liveCwd(core, space.Folder)
 	title := ""
 	if core != nil {
 		title = core.Title

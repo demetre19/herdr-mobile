@@ -400,3 +400,47 @@ func TestAgentRecordPrefersForegroundCwd(t *testing.T) {
 		t.Fatalf("project = %q, want Herdr Mobile", agent.Project)
 	}
 }
+
+// A stream record that captured fg=null (upstream resolves foreground
+// lazily) must self-heal: the probe fetch updates the agent's cwd AND
+// merges the fresher record back into the store, so the card stops
+// showing the launch dir forever (the "freewatch shows of-machinery"
+// report).
+func TestPollHealsNullForegroundRecord(t *testing.T) {
+	app := `#!/bin/sh
+cat <<'EOF'
+{"spaces":[{"id":"sp1","name":"of-machinery","folder":"/Users/apple/Developer/of-machinery","machine":null,"active":true,"tabs":[{"id":"tb1","name":"1","active":true,"settled":false,"terminals":[{"terminal":"t1hy","pane":"p1","status":"idle","app":"omp","name":null,"sub_agents":[]}]}]}]}
+EOF`
+	core := `#!/bin/sh
+case "$1" in
+server) echo '{"core":{"id":"c1","name":"mac"},"version":"0.1.16"}' ;;
+ls) echo '{"machines":[],"terminals":[]}' ;;
+get) echo '{"address":"t1hy","agent":"omp","cwd":"/Users/apple/Developer/of-machinery","state":"live","foreground":{"argv":["omp"],"cwd":"/Users/apple/Documents/DEV-WORK/freewatch","name":"omp","pid":82141}}' ;;
+esac`
+	w := NewWatcher(fakeHcBins(t, app, core), "mac", slog.Default())
+	w.onCoreEvent(CoreEvent{Snapshot: []CoreTerminal{{
+		Address: "t1hy", State: "live",
+		Cwd: "/Users/apple/Developer/of-machinery",
+		// Foreground nil — the lazy-resolution case that froze cards.
+	}}})
+	w.poll(context.Background())
+
+	snap := w.Current()
+	if len(snap.Agents) != 1 {
+		t.Fatalf("agents = %v", paneIDs(snap.Agents))
+	}
+	a := snap.Agents[0]
+	const want = "/Users/apple/Documents/DEV-WORK/freewatch"
+	if a.Cwd != want {
+		t.Fatalf("agent cwd = %q, want %q", a.Cwd, want)
+	}
+	if a.Project != "freewatch" {
+		t.Fatalf("agent project = %q, want freewatch", a.Project)
+	}
+	// The store must carry the merged record so the next poll rebuilds
+	// from it instead of re-freezing on the connect frame's fg=null.
+	stored := w.records["t1hy"]
+	if stored == nil || stored.Foreground == nil || stored.Foreground.Cwd != want {
+		t.Fatalf("store record = %+v, want merged fg.cwd", stored)
+	}
+}
