@@ -342,7 +342,7 @@ func TestPollUsesStreamRecordsWithoutGet(t *testing.T) {
 	core := `#!/bin/sh
 case "$1" in
 server) echo '{"core":{"id":"c1","name":"m"},"version":"0.1.16"}' ;;
-ls) echo '{"machines":[],"terminals":[]}' ;;
+ls) echo '{"machines":[],"terminals":[{"address":"t2f","agent":"omp","state":"live"}]}' ;;
 get) exit 1 ;;
 esac`
 	w := NewWatcher(fakeHcBins(t, app, core), "m", slog.Default())
@@ -414,7 +414,7 @@ EOF`
 	core := `#!/bin/sh
 case "$1" in
 server) echo '{"core":{"id":"c1","name":"mac"},"version":"0.1.16"}' ;;
-ls) echo '{"machines":[],"terminals":[]}' ;;
+ls) echo '{"machines":[],"terminals":[{"address":"t1hy","agent":"omp","state":"live"}]}' ;;
 get) echo '{"address":"t1hy","agent":"omp","cwd":"/Users/apple/Developer/of-machinery","state":"live","foreground":{"argv":["omp"],"cwd":"/Users/apple/Documents/DEV-WORK/freewatch","name":"omp","pid":82141}}' ;;
 esac`
 	w := NewWatcher(fakeHcBins(t, app, core), "mac", slog.Default())
@@ -442,5 +442,69 @@ esac`
 	stored := w.records["t1hy"]
 	if stored == nil || stored.Foreground == nil || stored.Foreground.Cwd != want {
 		t.Fatalf("store record = %+v, want merged fg.cwd", stored)
+	}
+}
+
+func TestPollPrunesRecordsAbsentFromLs(t *testing.T) {
+	// The store is merge-only: a terminal removed upstream (ofm rms lanes,
+	// reconnect gaps) stays zombie-live in w.records forever and publishes
+	// under the window-closed fallback. `hc ls` is the authority — records
+	// it no longer reports must vanish from the snapshot and the store.
+	app := "#!/bin/sh\nexit 1"
+	core := `#!/bin/sh
+case "$1" in
+server) echo '{"core":{"id":"c1","name":"m"},"version":"0.1.16"}' ;;
+ls) echo '{"machines":[],"terminals":[
+	{"address":"t2f","agent":"omp","state":"live"}]}' ;;
+get) exit 1 ;;
+esac`
+	w := NewWatcher(fakeHcBins(t, app, core), "m", slog.Default())
+	w.onCoreEvent(CoreEvent{Snapshot: []CoreTerminal{
+		{Address: "t2f", State: "live", Labels: map[string]string{
+			"herdr.space": "spa1", "herdr.tab": "tb1",
+			"where": "of-machinery / THE BOSS"}},
+		// Zombie: still state=live in the store, but the core removed
+		// the record entirely — `hc ls` no longer reports it.
+		{Address: "t9z", State: "live", Labels: map[string]string{
+			"ofm.space": "spa1", "ofm.tab": "tb9",
+			"ofm.tab_label": "L999", "where": "of-machinery / L999"}},
+		// Finished records are real inventory but never publish.
+		{Address: "t12", State: "finished", Labels: map[string]string{
+			"herdr.space": "spa2", "herdr.tab": "tb12", "where": "sample / 1"}},
+	}})
+	w.poll(context.Background())
+
+	snap := w.Current()
+	ids := paneIDs(snap.Agents)
+	if len(snap.Agents) != 1 || ids[0] != "t2f" {
+		t.Fatalf("agents = %v, want only live t2f", ids)
+	}
+	if w.records["t9z"] != nil {
+		t.Fatal("removed terminal stayed in the record store")
+	}
+}
+
+func TestPollKeepsDirtyMarkWhenGetFails(t *testing.T) {
+	// A dirty record whose `hc get` fails (or lands past getLimit) must
+	// stay dirty — otherwise a bulk event burst freezes dead lanes at
+	// their last "live" state forever.
+	app := "#!/bin/sh\nexit 1"
+	core := `#!/bin/sh
+case "$1" in
+server) echo '{"core":{"id":"c1","name":"m"},"version":"0.1.16"}' ;;
+ls) echo '{"machines":[],"terminals":[{"address":"t2f","agent":"omp","state":"live"}]}' ;;
+get) exit 1 ;;
+esac`
+	w := NewWatcher(fakeHcBins(t, app, core), "m", slog.Default())
+	w.onCoreEvent(CoreEvent{Snapshot: []CoreTerminal{
+		{Address: "t2f", State: "live", Labels: map[string]string{
+			"ofm.space": "spa1", "ofm.tab": "tb1",
+			"ofm.tab_label": "THE BOSS", "where": "of-machinery / THE BOSS"}},
+	}})
+	w.onCoreEvent(CoreEvent{Type: "exit", Terminal: "t2f"})
+	w.poll(context.Background())
+
+	if !w.dirtyAddrs["t2f"] {
+		t.Fatal("dirty mark was dropped after a failed hc get")
 	}
 }

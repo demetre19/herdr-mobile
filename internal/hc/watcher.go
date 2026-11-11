@@ -271,6 +271,42 @@ func (w *Watcher) poll(ctx context.Context) {
 		snap.Message = "Herdr App window is closed; showing core terminals"
 	}
 	// Machine names come from `hc ls`; when it fails mid-stream the remote
+	// `hc ls` is the inventory authority — the events stream only ever adds
+	// or patches records, so a terminal that died while the stream was down
+	// (or before the first snapshot) would stay zombie-live in w.records
+	// and keep publishing under the window-closed fallback. Reconcile the
+	// store against every successful ls: drop records the core no longer
+	// reports (removed/finished lanes ofm rms from the store), seed records
+	// the stream missed (created between reconnects — sparse, labels/fg get
+	// filled by the enrich pass or the next snapshot), and keep every
+	// existing record because ls carries no labels/foreground to merge.
+	// Federated addresses ride the same ls list, so remote zombies prune
+	// the same way. When ls itself fails there is no authority — leave the
+	// stream-fed store untouched rather than wiping it.
+	if termErr == nil {
+		known := make(map[string]bool, len(terminals))
+		for i := range terminals {
+			known[terminals[i].Address] = true
+		}
+		w.mu.Lock()
+		for addr := range w.records {
+			if !known[addr] {
+				delete(w.records, addr)
+				delete(w.fgProbed, addr)
+				delete(records, addr)
+			}
+		}
+		for i := range terminals {
+			addr := terminals[i].Address
+			if w.records[addr] == nil {
+				term := terminals[i]
+				w.records[addr] = &term
+				records[addr] = &term
+			}
+		}
+		w.mu.Unlock()
+	}
+	// Machine names come from `hc ls`; when it fails mid-stream the remote
 	// address prefixes ("machine/addr") supply them instead.
 	if streamLive {
 		merged := append([]string{}, machines...)
@@ -359,17 +395,23 @@ func (w *Watcher) poll(ctx context.Context) {
 	// (bounded, since ls carries no status).
 	const getLimit = 24
 	fetched := 0
+	requeue := map[string]bool{}
 	for _, a := range agents {
 		full := byAddress[a.TerminalID]
 		needsGet := full == nil || dirty[a.TerminalID] || !streamLive ||
 			(full.Foreground == nil && full.State == "live" && !probed[a.TerminalID])
 		if needsGet {
 			if fetched >= getLimit {
+				// Past the per-poll budget — keep the dirty mark so a
+				// burst (e.g. an ofm queue settling 30 lanes) retries
+				// next poll instead of freezing stale records live.
+				requeue[a.TerminalID] = true
 				continue
 			}
 			fetched++
 			got, err := w.client.Get(ctx, a.TerminalID)
 			if err != nil {
+				requeue[a.TerminalID] = true
 				continue
 			}
 			full = got
@@ -443,6 +485,18 @@ func (w *Watcher) poll(ctx context.Context) {
 		a.AgentRole = role
 		a.AgentModel = model
 		a.AgentEffort = effort
+	}
+
+	if len(requeue) > 0 {
+		w.mu.Lock()
+		for addr := range requeue {
+			// Don't resurrect a record the reconcile or a stream snapshot
+			// already resolved — only re-dirty what is still tracked.
+			if w.records[addr] != nil {
+				w.dirtyAddrs[addr] = true
+			}
+		}
+		w.mu.Unlock()
 	}
 
 	// Re-group label-carrying terminals into their real spaces when the
