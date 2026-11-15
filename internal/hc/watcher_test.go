@@ -319,6 +319,57 @@ esac`
 	}
 }
 
+func TestPollReconcilesStaleLiveRecordAgainstLs(t *testing.T) {
+	// The zombie-live card: a record the events stream seeded as "live"
+	// stays live forever if the exit event is missed — `hc ls` still lists
+	// the terminal (finished panes persist), so reconcile's absent-set
+	// keeps it and the fallback materializes it with its stale labels.
+	// `hc ls` is the state authority: a finished row must refresh the
+	// stored record, not merely keep it.
+	app := "#!/bin/sh\nexit 1"
+	core := `#!/bin/sh
+case "$1" in
+server) echo '{"core":{"id":"c1","name":"mac-mini"},"version":"0.1.16"}' ;;
+ls) echo '{"machines":[],"terminals":[
+	{"address":"t24c","agent":"omp","cwd":"/Users/apple/Developer/of-machinery","name":"the-boss","state":"finished","exit_code":0},
+	{"address":"t277","agent":"omp","cwd":"/Users/apple/Developer/of-machinery","name":"the-boss-live","state":"live"}]}' ;;
+get) echo '{"address":"'$2'","agent":"omp","cwd":"/Users/apple","state":"finished"}' ;;
+esac`
+	w := NewWatcher(fakeHcBins(t, app, core), "mac-mini", slog.Default())
+	// The stream seeded both records as live — the exit event for t24c
+	// never arrived, so its store entry is stale-live with its labels.
+	w.onCoreEvent(CoreEvent{Snapshot: []CoreTerminal{
+		{Address: "t24c", State: "live", Status: TerminalStatus{State: "working", App: "omp"},
+			Labels: map[string]string{
+				"herdr.space": "spa1", "herdr.tab": "tb1",
+				"ofm.tab_label": "OLD BOSS", "where": "of-machinery / OLD BOSS"}},
+		{Address: "t277", State: "live", Status: TerminalStatus{State: "working", App: "omp"},
+			Labels: map[string]string{
+				"herdr.space": "spa1", "herdr.tab": "tb2",
+				"ofm.tab_label": "THE BOSS", "where": "of-machinery / THE BOSS"}},
+	}})
+	w.poll(context.Background())
+
+	snap := w.Current()
+	ids := paneIDs(snap.Agents)
+	for _, id := range ids {
+		if id == "t24c" {
+			t.Fatalf("stale-live finished terminal materialized: %v", ids)
+		}
+	}
+	if len(ids) != 1 || ids[0] != "t277" {
+		t.Fatalf("agents = %v, want only live t277", ids)
+	}
+	// The stored record must carry the reconciled state too — a second
+	// poll must not resurrect the card.
+	w.poll(context.Background())
+	for _, id := range paneIDs(w.Current().Agents) {
+		if id == "t24c" {
+			t.Fatal("finished terminal returned on the next poll")
+		}
+	}
+}
+
 func TestEventStorePatchesTitlesAndDirtiesOthers(t *testing.T) {
 	w := NewWatcher(&Client{}, "mac-mini", slog.Default())
 	w.wake = make(chan struct{}, 1)

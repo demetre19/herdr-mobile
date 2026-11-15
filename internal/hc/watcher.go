@@ -298,11 +298,28 @@ func (w *Watcher) poll(ctx context.Context) {
 		}
 		for i := range terminals {
 			addr := terminals[i].Address
-			if w.records[addr] == nil {
-				term := terminals[i]
-				w.records[addr] = &term
-				records[addr] = &term
+			if rec := w.records[addr]; rec != nil {
+				// `hc ls` is the state authority: a terminal that finished
+				// while its exit event was missed (stream reconnect, seq
+				// gap) keeps a stale "live" in the store — and because ls
+				// lists finished terminals forever, the absent-set above
+				// never prunes it. Refresh state/status/name so the
+				// window-closed fallback can't materialize the dead lane
+				// as a working card. Labels/foreground/title stay: ls
+				// rows don't carry them.
+				rec.State = terminals[i].State
+				rec.ExitCode = terminals[i].ExitCode
+				if terminals[i].Status.State != "" {
+					rec.Status = terminals[i].Status
+				}
+				if terminals[i].Name != "" {
+					rec.Name = terminals[i].Name
+				}
+				continue
 			}
+			term := terminals[i]
+			w.records[addr] = &term
+			records[addr] = &term
 		}
 		w.mu.Unlock()
 	}
