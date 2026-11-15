@@ -257,3 +257,13 @@
   cost) — the relay bounds count+lifetime, it can't fix the stream.
   Tests: `TestObserverCapEvictsOldest`, `TestObserveSharesOneAttach`
   (HC_LIVE_SMOKE, one attach across repeated reads).
+- **Absent-prune isn't enough — `hc ls` lists finished terminals
+  forever** (v1.0.55, commit `3859c0d`): v1.0.54's reconcile deleted
+  records missing from `hc ls`, but a record whose exit event was
+  missed stayed `state=live` indefinitely and the window-closed label
+  fallback rendered it as a live card (ghost "OLD BOSS" lanes on the
+  phone). Reconcile now refreshes `State`/`ExitCode`/`Status`/`Name`
+  on every record ls still lists; labels/foreground/title untouched.
+  `TestPollReconcilesStaleLiveRecordAgainstLs` covers the lifecycle:
+  stale-live record + ls finished row + topoErr → no card, and no
+  resurrection on the next poll.
