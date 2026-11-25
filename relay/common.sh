@@ -1657,7 +1657,7 @@ arm_setup_link() {
 
 print_setup_link_arming() {
     if [ "$1" -eq 0 ]; then
-        echo "  This link pairs one phone within 10 minutes. Print it again for another."
+        echo "  This link pairs one phone within 3 minutes. Print it again for another."
     else
         echo "  The relay is not running here; start it, then print the link again."
     fi

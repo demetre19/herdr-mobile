@@ -21,7 +21,7 @@ const (
 	storeFilename         = "devices.json"
 	secretBytes           = 32
 	identifierBytes       = 18
-	invitationLifetime    = 10 * time.Minute
+	invitationLifetime    = 3 * time.Minute
 	bootstrapInvitationID = "bootstrap"
 	maxInviteAttempts     = 5
 	maxNameBytes          = 80
