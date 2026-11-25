@@ -129,6 +129,11 @@
   the reconnect handshake reports hc state `starting` until the first
   poll commits, and the frontend auto-navigates once to `#hc` when a
   relay's legacy inventory is persistently erroring while hc data exists.
+  **id composition trap (v1.0.58):** the frontend packs `pane_id` as
+  `relayId::rawPaneId` (`clientPaneId` in `src/lib/agents.ts`) — a
+  `pane_id.startsWith('hc:')` predicate there is ALWAYS false. hc-lane
+  checks must use `raw_pane_id`. Grep how an id is composed before
+  writing any prefix predicate against it.
 - `hc_launch` mounts a tab+terminal in the open window: `handleHcLaunch`
   resolves `profile_id` through `profiles.Resolver.Profile().Argv` (same
   catalog as `agent_start`), then `Client.TabNew`. **`tab.new` lands in the
