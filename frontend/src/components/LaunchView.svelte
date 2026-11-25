@@ -56,7 +56,15 @@
     void $connections;
     return [...$connections.values()].some((conn) => conn.capabilities.includes('hc_launch'));
   });
-  let launchTarget = $state<'legacy' | 'app'>(untrack(() => hc ? 'app' : 'legacy'));
+  let launchTarget = $state<'legacy' | 'app'>(untrack(() => {
+    if (hc) return 'app';
+    // Legacy herdr's server is absent on herdr-core 0.9.x — no relay whose
+    // legacy inventory is in permanent error can start a legacy agent, so
+    // defaulting to it yields a dead form. Prefer the app lane when no
+    // connected relay has a working legacy inventory.
+    const anyLegacyReady = [...$connections.values()].some((conn) => conn.status === 'connected' && conn.inventory.state === 'ready');
+    return anyLegacyReady ? 'legacy' : 'app';
+  }));
   const hcRelays = $derived($relays.filter((relay) => {
     const conn = $connections.get(relay.id);
     return conn?.status === 'connected' && conn.capabilities.includes('hc_launch');

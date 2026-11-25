@@ -34,9 +34,16 @@ func hcAddress(paneID string) string {
 
 // hcInventoryMessage is the phone-visible snapshot of the new app's topology.
 func hcInventoryMessage(snap hc.Snapshot) map[string]any {
+	// A never-polled snapshot (relay just started) is warming up, not broken:
+	// "error" would blank the phone's hc sections on every reconnect in the
+	// first seconds after a relay restart. `LastAttempt == 0` marks the
+	// zero-value store exactly — the first poll stamps it before any commit.
 	state := "ready"
 	if !snap.Available {
 		state = "error"
+		if snap.LastAttempt == 0 {
+			state = "starting"
+		}
 	}
 	spaces := snap.Spaces
 	if spaces == nil {

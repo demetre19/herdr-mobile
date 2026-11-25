@@ -400,7 +400,9 @@
   {@const age = relativeAge(agent)}
   {@const agentPath = relayPath(agent.relay_id || relayId, String(agent.cwd || ''))}
   {@const wt = worktreeTailStart(agentPath, String(agent.cwd || ''), '')}
-  {@const inventoryReady = !connections.has(agent.relay_id || relayId) || connections.get(agent.relay_id || relayId)?.inventory.state === 'ready'}
+  {@const hcRelayId = agent.relay_id || relayId}
+  {@const hcInventory = $hcInventories.get(hcRelayId)}
+  {@const inventoryReady = !hcInventory || hcInventory.state !== 'error'}
   <article class:blocked class="agent-card compact-agent-card" class:stale={!inventoryReady} class:card-live={tone === 'success'}>
     <button
       class="agent-open"
@@ -529,6 +531,8 @@
             <span class="agent-count">offline</span>
           {:else if section.inventory.state === 'error'}
             <span class="agent-count">{section.inventory.message || 'Herdr App unavailable'}</span>
+          {:else if section.inventory.state === 'starting'}
+            <span class="agent-count">connecting…</span>
           {/if}
         </h2>
 

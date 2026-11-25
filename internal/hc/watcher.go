@@ -54,7 +54,12 @@ type Watcher struct {
 	// fgProbed marks live records whose missing foreground block we already
 	// paid one `hc get` for; cleared by snapshot/dirty events so a later
 	// upstream resolution gets another chance without per-poll churn.
-	fgProbed   map[string]bool
+	fgProbed map[string]bool
+	// labelProbed marks live records whose missing labels we already paid
+	// one `hc get` for in the window-closed fallback; same throttle
+	// semantics as fgProbed — without it a genuinely unlabeled stray shell
+	// would cost one get per poll forever.
+	labelProbed map[string]bool
 	streamLive bool
 	// pollMu serializes interval ticks and event-wake polls.
 	pollMu sync.Mutex
@@ -83,7 +88,8 @@ func NewWatcher(client *Client, hostname string, logger *slog.Logger) *Watcher {
 		interval:   5 * time.Second,
 		records:    map[string]*CoreTerminal{},
 		dirtyAddrs: map[string]bool{},
-		fgProbed:   map[string]bool{},
+		fgProbed:    map[string]bool{},
+		labelProbed: map[string]bool{},
 		logger:     logger,
 	}
 }
@@ -382,6 +388,21 @@ func (w *Watcher) poll(ctx context.Context) {
 	// the core (hc's own add-* jobs, stray shells) is invisible in the
 	// app, so it stays off the phone too.
 	if topoErr != nil {
+		// Labels decide visibility — fetch them BEFORE the filter. A record
+		// seeded sparse from `hc ls` (no labels) or one the stream never
+		// delivered would otherwise be skipped here and, since only agents
+		// are ever `hc get`-ed downstream, stay invisible forever: exactly
+		// the "no sessions with the app closed" failure. Bounded by the
+		// same getLimit the enrich pass uses; labelProbed throttles
+		// terminals that genuinely carry no labels (stray shells).
+		const labelGetLimit = 24
+		labelFetched := 0
+		w.mu.Lock()
+		labelProbedCopy := make(map[string]bool, len(w.labelProbed))
+		for addr := range w.labelProbed {
+			labelProbedCopy[addr] = true
+		}
+		w.mu.Unlock()
 		for i := range terminals {
 			t := &terminals[i]
 			if seen[t.Address] || t.State != "live" {
@@ -393,8 +414,29 @@ func (w *Watcher) poll(ctx context.Context) {
 					labels = full.Labels
 				}
 			}
+			if len(labels) == 0 && !labelProbedCopy[t.Address] && labelFetched < labelGetLimit {
+				labelFetched++
+				got, err := w.client.Get(ctx, t.Address)
+				if err != nil {
+					// Unprobed on failure: a transient error retries next poll.
+					continue
+				}
+				w.mu.Lock()
+				w.records[got.Address] = got
+				byAddress[got.Address] = got
+				if len(got.Labels) == 0 {
+					w.labelProbed[got.Address] = true
+				}
+				w.mu.Unlock()
+				labels = got.Labels
+				labelsByAddr[got.Address] = got.Labels
+			}
 			if labels["herdr.space"] == "" && labels["ofm.space"] == "" {
 				continue
+			}
+			core := byAddress[t.Address]
+			if core == nil {
+				core = t
 			}
 			space := Space{ID: "hc-core:" + t.Address, Name: "Core terminals", Tabs: []Tab{{
 				ID: "hc-core:" + t.Address, Name: t.Name,
@@ -403,7 +445,7 @@ func (w *Watcher) poll(ctx context.Context) {
 			// space must ride the snapshot, not just the agent record.
 			snap.Spaces = append(snap.Spaces, space)
 			term := Terminal{Address: t.Address}
-			agents = append(agents, agentRecord(w.hostname, serverID, space, space.Tabs[0], term, t))
+			agents = append(agents, agentRecord(w.hostname, serverID, space, space.Tabs[0], term, core))
 		}
 	}
 	// The events stream already delivers full records; `hc get` is only the

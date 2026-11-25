@@ -1509,7 +1509,13 @@ func (s *Server) effectiveCapabilitiesFor(herdrStatus herdr.ServerStatus) []stri
 	if speechStatus.ManagementSupported {
 		capabilities = append(capabilities, protocol.SpeechVoiceManagementCapability)
 	}
-	if herdrStatus.Supports(herdr.FeaturePaneRead) {
+	// The pane watch path is fully hc-native for `hc:` panes (pollHcPaneWatch
+	// reads through the hc CLI, never the legacy socket) — withdrawing the
+	// capability whenever the legacy server is absent degraded every hc
+	// terminal view to 3s polling. Advertise it when either lane can serve
+	// frames; legacy panes on a dead legacy lane simply fail their probes as
+	// before.
+	if herdrStatus.Supports(herdr.FeaturePaneRead) || s.hcW != nil {
 		capabilities = append(capabilities, "pane_realtime_delta")
 	}
 	if herdrStatus.Supports(herdr.FeatureTabMove) {

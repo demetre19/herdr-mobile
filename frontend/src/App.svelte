@@ -76,6 +76,7 @@
   const connections = relayStore.connections;
   const agents = relayStore.agents;
   const hcAgents = relayStore.hcAgents;
+  const hcInventories = relayStore.hcInventories;
   const workspaces = relayStore.workspaces;
   const activities = relayStore.activities;
   const frames = relayStore.terminalFrames;
@@ -172,6 +173,38 @@
     listSourceApplied = true;
     if ($listSource === 'hc') navigate({ view: 'hc' });
   });
+  // Legacy-lane migration: herdr-core 0.9.x no longer runs the legacy herdr
+  // server, so relays that only ever served agents through `hc` report the
+  // legacy inventory in permanent error (never one success) — a phone parked
+  // on the 'agents' pref sees an empty dead view forever while the same
+  // terminals are live in the hc lane. When some connected relay advertises
+  // hc_view while its legacy inventory never once succeeded, and no connected
+  // relay without hc_view has a working legacy lane, the hc surface is the
+  // only place sessions exist: follow it once. A manual toggle afterwards
+  // still wins — this effect fires one time and only on the untouched
+  // landing view. `starting` is not dead: a relay restarting reports it
+  // until the first poll commits.
+  let legacyMigrationApplied = false;
+  const legacyLaneDead = $derived.by(() => {
+    void $connections;
+    const connected = [...$connections.values()].filter((connection) => connection.status === 'connected');
+    if (!connected.length) return false;
+    let hcCapableDeadLegacy = false;
+    for (const connection of connected) {
+      const hasHc = connection.capabilities.includes('hc_view');
+      const inventory = connection.inventory;
+      if (!hasHc && inventory.state === 'ready') return false;
+      if (hasHc && inventory.state === 'error' && inventory.lastSuccessAt === 0) {
+        hcCapableDeadLegacy = true;
+      }
+    }
+    return hcCapableDeadLegacy;
+  });
+  $effect(() => {
+    if (legacyMigrationApplied || !legacyLaneDead || $currentView.view !== 'agents') return;
+    legacyMigrationApplied = true;
+    navigate({ view: 'hc' });
+  });
   function toggleListSource() {
     const next = $currentView.view === 'hc' ? 'agents' : 'hc';
     setListSource(next === 'hc' ? 'hc' : 'agents');
@@ -255,6 +288,30 @@
       hollow: false,
       label: 'Relay reconnecting',
     };
+    // hc panes answer to the hc inventory, not the legacy one — herdr-core
+    // 0.9.x never runs the legacy server, so gating hc agents on it pins
+    // every card at "inventory unavailable" forever.
+    const isHcPane = Boolean(activeAgent.pane_id?.startsWith('hc:'));
+    const activeHcInventory = isHcPane ? $hcInventories.get(activeAgent.relay_id) : undefined;
+    if (isHcPane) {
+      if (activeHcInventory?.state === 'error') return {
+        tone: 'warning' as const,
+        hollow: false,
+        label: activeHcInventory.message || 'Herdr App core unavailable',
+      };
+      const group = agentStatusGroup(activeAgent);
+      return {
+        tone: agentStatusTone(activeAgent),
+        hollow: group === 'ready',
+        label: `Agent ${group === 'ready'
+          ? 'idle'
+          : group === 'attention'
+            ? 'needs inspection'
+            : group === 'other'
+              ? activeAgent.status || 'unknown'
+              : group}`,
+      };
+    }
     if (activeConnection.inventory.state !== 'ready') return {
       tone: 'warning' as const,
       hollow: false,
@@ -855,7 +912,7 @@
       <p role="alert">This agent is not available.</p>
       <Button onclick={() => replaceView({ view: 'agents' })}>Back to agents</Button>
     </main>
-  {:else if $currentView.view === 'terminal' && activeAgent && activeConnection?.status === 'connected' && activeConnection.inventory.state !== 'ready' && !$frames.has(activeAgent.pane_id)}
+  {:else if $currentView.view === 'terminal' && activeAgent && activeConnection?.status === 'connected' && !activeAgent.pane_id?.startsWith('hc:') && activeConnection.inventory.state !== 'ready' && !$frames.has(activeAgent.pane_id)}
     <main class="page terminal-loading" aria-label="Agent inventory unavailable">
       <p role="alert">{activeConnection.inventory.message || 'This computer’s Herdr agent inventory is not ready.'}</p>
       <Button onclick={() => replaceView({ view: 'agents' })}>Back to agents</Button>

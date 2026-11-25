@@ -153,24 +153,29 @@ ls) echo '{"machines":[],"terminals":[
 	{"address":"t1","agent":"hc","cwd":"/Users/apple","name":"add-jump","state":"live"},
 	{"address":"t2f","agent":"omp","cwd":"/Users/apple","name":"boss","state":"live"},
 	{"address":"t12","agent":"zsh","cwd":"/Users/apple","state":"finished"}]}' ;;
-get) echo '{"address":"'$2'","agent":"omp","cwd":"/Users/apple","state":"live","labels":{"herdr.space":"spa1","herdr.tab":"tb1","ofm.tab_label":"THE BOSS","where":"of-machinery / THE BOSS"}}' ;;
+get)
+	if [ "$2" = "t2f" ]; then echo '{"address":"t2f","agent":"omp","cwd":"/Users/apple","state":"live","labels":{"herdr.space":"spa1","herdr.tab":"tb1","ofm.tab_label":"THE BOSS","where":"of-machinery / THE BOSS"}}';
+	else echo '{"address":"'$2'","agent":"hc","cwd":"/Users/apple","state":"live"}'; fi ;;
 esac`
 	w := NewWatcher(fakeHcBins(t, app, core), "mac-mini", slog.Default())
 	w.poll(context.Background())
 
 	snap := w.Current()
-	// t2f's labels only exist behind `hc get`, which the fallback filter
-	// must not block on — unlabeled and finished are both hidden.
-	if len(snap.Agents) != 0 {
-		t.Fatalf("agents = %v, want all hidden", paneIDs(snap.Agents))
+	// Labels are fetched BEFORE the visibility filter: t2f's labels exist
+	// behind `hc get`, so it must surface regrouped under its real space —
+	// hiding it was the "no sessions with the app closed" bug. Unlabeled
+	// t1 and finished t12 stay hidden.
+	if len(snap.Agents) != 1 || snap.Agents[0].TerminalID != "t2f" {
+		t.Fatalf("agents = %v, want exactly [t2f]", paneIDs(snap.Agents))
 	}
-	if len(snap.Spaces) != 0 {
-		t.Fatalf("spaces = %v, want none", snap.Spaces)
+	if len(snap.Spaces) != 1 {
+		t.Fatalf("spaces = %v, want exactly one", snap.Spaces)
 	}
 	if snap.Message == "" {
 		t.Fatal("window-closed message missing")
 	}
 }
+
 
 func paneIDs(agents []*coordinator.AgentState) []string {
 	ids := make([]string, 0, len(agents))
@@ -557,5 +562,63 @@ esac`
 
 	if !w.dirtyAddrs["t2f"] {
 		t.Fatal("dirty mark was dropped after a failed hc get")
+	}
+}
+
+func TestWindowClosedUnlabeledTerminalProbedOncePerDirtyCycle(t *testing.T) {
+	// A genuinely label-less live shell must not cost one `hc get` per
+	// poll forever: after the first probe the labelProbed throttle skips
+	// it. The counting get script proves the bound.
+	app := "#!/bin/sh\nexit 1"
+	countFile := filepath.Join(t.TempDir(), "gets")
+	core := `#!/bin/sh
+case "$1" in
+server) echo '{"core":{"id":"c1","name":"mac-mini"},"version":"0.1.16"}' ;;
+ls) echo '{"machines":[],"terminals":[{"address":"t1","agent":"zsh","cwd":"/u","state":"live"}]}' ;;
+get)
+	echo x >> "` + countFile + `"
+	echo '{"address":"'$2'","agent":"zsh","cwd":"/u","state":"live"}' ;;
+esac`
+	w := NewWatcher(fakeHcBins(t, app, core), "mac-mini", slog.Default())
+	for i := 0; i < 3; i++ {
+		w.poll(context.Background())
+	}
+	data, _ := os.ReadFile(countFile)
+	gets := len(strings.Fields(string(data)))
+	if gets > 1 {
+		t.Fatalf("unlabeled terminal got %d hc get calls in 3 polls, want at most 1", gets)
+	}
+	if len(w.Current().Agents) != 0 {
+		t.Fatal("unlabeled stray shell must stay invisible with the window closed")
+	}
+}
+
+func TestWindowClosedLabeledTerminalSurfacesAfterSparseLsSeed(t *testing.T) {
+	// The regression that blanked the phone with the app closed: ls rows
+	// carry no labels, so a record seeded sparse from `hc ls` was filtered
+	// before anyone fetched its labels. The pre-filter fetch must surface
+	// it regrouped under its real space in a single poll.
+	app := "#!/bin/sh\nexit 1"
+	core := `#!/bin/sh
+case "$1" in
+server) echo '{"core":{"id":"c1","name":"mac-mini"},"version":"0.1.16"}' ;;
+ls) echo '{"machines":[],"terminals":[{"address":"t9","agent":"omp","cwd":"/u/proj","state":"live","where":"proj / 1"}]}' ;;
+get) echo '{"address":"'$2'","agent":"omp","cwd":"/u/proj","state":"live","labels":{"herdr.space":"spa9","herdr.tab":"tb9","where":"proj / 1"}}' ;;
+esac`
+	w := NewWatcher(fakeHcBins(t, app, core), "mac-mini", slog.Default())
+	w.poll(context.Background())
+	snap := w.Current()
+	if len(snap.Agents) != 1 || snap.Agents[0].TerminalID != "t9" {
+		t.Fatalf("agents = %v, want [t9]", paneIDs(snap.Agents))
+	}
+	// regroupLabeledTerminals rebuilds the real space from labels
+	found := false
+	for _, sp := range snap.Spaces {
+		if sp.Name == "proj" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("spaces = %+v, want a real 'proj' space", snap.Spaces)
 	}
 }

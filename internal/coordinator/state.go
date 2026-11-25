@@ -229,6 +229,16 @@ func (s *State) MarkInventoryFailure(err error) {
 		s.inventoryMessage = "Herdr is not running on this computer. Start it with `herdr`."
 		return
 	}
+	// A dead socket path (ENOENT / ECONNREFUSED wrapped in ErrNotStarted)
+	// is the same verdict the CLI reports as server_not_running — herdr-core
+	// 0.9.x never runs the legacy server at all, so classifying it as a
+	// transient command failure both misleads the phone's UI and hides the
+	// permanent-absence state the fallback logic keys on.
+	if errors.Is(err, herdr.ErrNotStarted) {
+		s.inventoryErrorCode = "server_not_running"
+		s.inventoryMessage = "Herdr is not running on this computer. Start it with `herdr`."
+		return
+	}
 	s.inventoryErrorCode = "command_failed"
 	s.inventoryMessage = "Unable to read the current Herdr agent inventory."
 }
