@@ -113,6 +113,22 @@
   contract but normally never ships. Never `hc get` a terminal just to
   decide whether to show it — remote `machine/addr` Gets cost a
   federation round-trip each.
+  **Exception to the never-Get rule (v1.0.56):** when the window is
+  CLOSED (`herdr-app ls` errors), the fallback must fetch labels for
+  label-less terminals BEFORE the visibility filter — the sparse `hc ls`
+  seed carries no labels, so filtering first hides every terminal that
+  was mounted while the window was open. The pre-filter fetch is bounded
+  (24 per poll) and throttled one-shot per dirty cycle (`labelProbed`)
+  so remote terminals never pay a repeated federation round-trip. The hc
+  lane is independent of the legacy herdr server: herdr-core 0.9.x never
+  starts it, so the legacy `agents` inventory is in permanent error on
+  0.9.x installs while hc keeps serving — even with Herdr.app fully quit
+  (`hc-launchd` runs standalone). UI gating is therefore per-lane: hc
+  cards, hc terminal opening and hc pane frames never depend on legacy
+  inventory health, `pane_realtime_delta` is advertised when `hcW != nil`,
+  the reconnect handshake reports hc state `starting` until the first
+  poll commits, and the frontend auto-navigates once to `#hc` when a
+  relay's legacy inventory is persistently erroring while hc data exists.
 - `hc_launch` mounts a tab+terminal in the open window: `handleHcLaunch`
   resolves `profile_id` through `profiles.Resolver.Profile().Argv` (same
   catalog as `agent_start`), then `Client.TabNew`. **`tab.new` lands in the
