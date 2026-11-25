@@ -38,7 +38,7 @@
   // Herdr App terminals (hc:) have no OMP session JSONL and no fresh-agent
   // restart path: session rename is absent, and Clear Agent's herdr restart
   // is a plain interrupt there, which is not what the button promises.
-  const isHcPane = $derived(Boolean(agent?.pane_id?.startsWith('hc:')));
+  const isHcPane = $derived(Boolean(agent?.raw_pane_id?.startsWith('hc:')));
 
   $effect(() => {
     if (!open) {

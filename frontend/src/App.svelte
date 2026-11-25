@@ -233,7 +233,7 @@
     && activeConnection?.capabilities.includes('workspace_inspection')
     // hc: federation terminals (machine/addr) run on another machine —
     // the relay only inspects local workspaces.
-    && !(activeAgent?.pane_id?.startsWith('hc:') && activeAgent?.terminal_id?.includes('/')),
+    && !(activeAgent?.raw_pane_id?.startsWith('hc:') && activeAgent?.terminal_id?.includes('/')),
   ));
   const connected = $derived([...$connections.values()].filter((connection) => connection.status === 'connected').length);
   const connecting = $derived([...$connections.values()].some((connection) => connection.status === 'connecting'));
@@ -291,7 +291,7 @@
     // hc panes answer to the hc inventory, not the legacy one — herdr-core
     // 0.9.x never runs the legacy server, so gating hc agents on it pins
     // every card at "inventory unavailable" forever.
-    const isHcPane = Boolean(activeAgent.pane_id?.startsWith('hc:'));
+    const isHcPane = Boolean(activeAgent.raw_pane_id?.startsWith('hc:'));
     const activeHcInventory = isHcPane ? $hcInventories.get(activeAgent.relay_id) : undefined;
     if (isHcPane) {
       if (activeHcInventory?.state === 'error') return {
@@ -727,7 +727,7 @@
     {/if}
     <span
       class={`status-dot status-${headerIndicator.tone}`}
-      class:hc-pane-dot={Boolean(activeAgent?.pane_id?.startsWith('hc:'))}
+      class:hc-pane-dot={Boolean(activeAgent?.raw_pane_id?.startsWith('hc:'))}
       class:hollow={headerIndicator.hollow}
       role="img"
       aria-label={headerIndicator.label}
@@ -735,7 +735,7 @@
     <div class="header-title">
       <div class="header-brand">
         {#if headerTitle === 'herdr'}<span class:hc-brand={$currentView.view === 'hc'}><BrandLogo size={20} /></span>{/if}<h1>{headerTitle}</h1>
-        {#if activeAgent?.pane_id?.startsWith('hc:')}<span class="hc-pane-badge" title="Herdr App terminal">▣</span>{/if}
+        {#if activeAgent?.raw_pane_id?.startsWith('hc:')}<span class="hc-pane-badge" title="Herdr App terminal">▣</span>{/if}
       </div>
       {#if headerMeta}<span>{headerMeta}</span>{/if}
     </div>
@@ -912,7 +912,7 @@
       <p role="alert">This agent is not available.</p>
       <Button onclick={() => replaceView({ view: 'agents' })}>Back to agents</Button>
     </main>
-  {:else if $currentView.view === 'terminal' && activeAgent && activeConnection?.status === 'connected' && !activeAgent.pane_id?.startsWith('hc:') && activeConnection.inventory.state !== 'ready' && !$frames.has(activeAgent.pane_id)}
+  {:else if $currentView.view === 'terminal' && activeAgent && activeConnection?.status === 'connected' && !activeAgent.raw_pane_id?.startsWith('hc:') && activeConnection.inventory.state !== 'ready' && !$frames.has(activeAgent.pane_id)}
     <main class="page terminal-loading" aria-label="Agent inventory unavailable">
       <p role="alert">{activeConnection.inventory.message || 'This computer’s Herdr agent inventory is not ready.'}</p>
       <Button onclick={() => replaceView({ view: 'agents' })}>Back to agents</Button>
